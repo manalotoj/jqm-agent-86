@@ -15,3 +15,8 @@ class SessionRepository(Protocol):
         self,
         session_id: str,
     ) -> Session | None: ...
+
+    async def list_sessions(
+        self,
+        user_id: str,
+    ) -> list[Session]: ...

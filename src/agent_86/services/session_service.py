@@ -1,4 +1,5 @@
-from agent_86.domain.schemas.session import CreateSessionRequest, SessionResponse
+from agent_86.domain.models.session import Session
+from agent_86.domain.schemas.session import CreateSessionRequest
 from agent_86.repositories.session_repository import SessionRepository
 
 
@@ -10,7 +11,7 @@ class SessionService:
         self,
         user_id: str,
         request: CreateSessionRequest,
-    ) -> SessionResponse:
+    ) -> Session:
         return await self._repository.create_session(
             user_id=user_id,
             request=request,
@@ -19,5 +20,11 @@ class SessionService:
     async def get_session(
         self,
         session_id: str,
-    ) -> SessionResponse | None:
+    ) -> Session | None:
         return await self._repository.get_session(session_id)
+
+    async def list_sessions(
+        self,
+        user_id: str,
+    ) -> list[Session]:
+        return await self._repository.list_sessions(user_id)
