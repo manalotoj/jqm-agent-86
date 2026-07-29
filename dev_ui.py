@@ -2,6 +2,10 @@ import requests
 import streamlit as st
 
 API_BASE_URL = "http://127.0.0.1:8000"
+MODEL_OPTIONS = [
+    "gpt-4.1-mini-2",
+    "gpt-5.4",
+]
 
 
 def list_sessions() -> list[dict]:
@@ -29,11 +33,17 @@ def list_messages(session_id: str) -> list[dict]:
     return response.json()
 
 
-def send_chat(session_id: str, content: str) -> dict:
+def send_chat(session_id: str, content: str, model: str) -> dict:
     response = requests.post(
         f"{API_BASE_URL}/sessions/{session_id}/chat",
-        json={"content": content, "metadata": {"source": "streamlit"}},
-        timeout=30,
+        json={
+            "content": content,
+            "metadata": {
+                "source": "streamlit",
+                "model": model,
+            },
+        },
+        timeout=60,
     )
     response.raise_for_status()
     return response.json()
@@ -45,37 +55,69 @@ st.title("agent-86")
 if "selected_session_id" not in st.session_state:
     st.session_state.selected_session_id = None
 
+try:
+    sessions = list_sessions()
+except requests.RequestException as exc:
+    st.error(f"Could not reach backend: {exc}")
+    st.stop()
+
+if st.session_state.selected_session_id is None and sessions:
+    st.session_state.selected_session_id = sessions[0]["id"]
+
 with st.sidebar:
     st.subheader("Sessions")
 
-    new_title = st.text_input("New session title", value="")
-    if st.button("Create session"):
-        created = create_session(new_title or "Untitled session")
-        st.session_state.selected_session_id = created["id"]
-        st.rerun()
+    selected_model = st.selectbox(
+        "Model",
+        MODEL_OPTIONS,
+        index=0,
+    )
 
-    sessions = list_sessions()
+    new_title = st.text_input("New session title")
+    if st.button("Create session", use_container_width=True):
+        try:
+            created = create_session(new_title or "Untitled session")
+            st.session_state.selected_session_id = created["id"]
+            st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Create session failed: {exc}")
 
     for session in sessions:
         label = session["title"] or session["id"]
-        if st.button(label, key=session["id"], use_container_width=True):
+        is_selected = session["id"] == st.session_state.selected_session_id
+        button_label = f"• {label}" if is_selected else label
+
+        if st.button(button_label, key=session["id"], use_container_width=True):
             st.session_state.selected_session_id = session["id"]
             st.rerun()
 
 session_id = st.session_state.selected_session_id
+selected_session = next((s for s in sessions if s["id"] == session_id), None)
 
-if not session_id:
+if not session_id or selected_session is None:
     st.info("Create or select a session.")
 else:
-    st.subheader(f"Session: {session_id}")
+    session_title = selected_session["title"] or session_id
+    st.subheader(session_title)
+    st.caption(f"Session ID: {session_id}")
 
-    messages = list_messages(session_id)
+    try:
+        messages = list_messages(session_id)
+    except requests.RequestException as exc:
+        st.error(f"Could not load messages: {exc}")
+        st.stop()
 
     for message in messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
+            model_used = message.get("metadata", {}).get("model")
+            if model_used:
+                st.caption(f"model: {model_used}")
 
     prompt = st.chat_input("Send a message")
     if prompt:
-        send_chat(session_id, prompt)
-        st.rerun()
+        try:
+            send_chat(session_id, prompt, selected_model)
+            st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Chat request failed: {exc}")

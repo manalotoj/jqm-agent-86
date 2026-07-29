@@ -4,3 +4,5 @@ pydantic-settings
 aiohttp
 streamlit
 requests
+openai
+azure-identity

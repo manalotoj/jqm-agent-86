@@ -3,7 +3,9 @@ from azure.cosmos.aio import CosmosClient
 from agent_86.core.config import settings
 from agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
 from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
+from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
+from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
 
 
@@ -28,6 +30,8 @@ _message_repository = CosmosMessageRepository(_messages_container)
 
 _session_service = SessionService(_session_repository)
 _message_service = MessageService(_message_repository)
+_chat_model_service = ChatModelService()
+_model_router = ModelRouter()
 
 
 def get_session_service() -> SessionService:
@@ -36,3 +40,11 @@ def get_session_service() -> SessionService:
 
 def get_message_service() -> MessageService:
     return _message_service
+
+
+def get_chat_model_service() -> ChatModelService:
+    return _chat_model_service
+
+
+def get_model_router() -> ModelRouter:
+    return _model_router

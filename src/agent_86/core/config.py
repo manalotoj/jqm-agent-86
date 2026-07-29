@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     cosmos_messages_container_name: str = "messages"
     cosmos_verify_ssl: bool = True
 
+    foundry_openai_base_url: str
+    foundry_default_chat_model: str
+    foundry_premium_chat_model: str
+    azure_openai_verify_ssl: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
