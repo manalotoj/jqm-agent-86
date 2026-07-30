@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     foundry_premium_chat_model: str
     azure_openai_verify_ssl: bool = True
 
+    tavily_api_key: str | None = None
+    brave_search_api_key: str | None = None
+    web_search_timeout_seconds: float = 10.0
+    web_search_max_results: int = 5
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

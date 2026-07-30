@@ -7,9 +7,8 @@ from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
+
 from agent_86.services.tool_service import ToolService
-from agent_86.tools.echo_tool import EchoTool
-from agent_86.tools.tool_registry import ToolRegistry
 from agent_86.tools.tool_registry import ToolRegistry
 
 from agent_86.services.web_search_service import WebSearchService

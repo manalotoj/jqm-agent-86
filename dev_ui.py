@@ -51,7 +51,7 @@ def list_messages(session_id: str) -> list[dict]:
     return response.json()
 
 
-def send_chat(session_id: str, content: str, model: str) -> dict:
+def send_chat(session_id: str, content: str, model: str, enable_web_search: bool) -> dict:
     response = requests.post(
         f"{API_BASE_URL}/sessions/{session_id}/chat",
         json={
@@ -59,6 +59,7 @@ def send_chat(session_id: str, content: str, model: str) -> dict:
             "metadata": {
                 "source": "streamlit",
                 "model": model,
+                "enable_web_search": enable_web_search,
             },
         },
         timeout=60,
@@ -94,6 +95,13 @@ with st.sidebar:
         "Model",
         MODEL_OPTIONS,
         index=0,
+    )
+
+    # Add this checkbox for Web Search toggle BEFORE the Create session button, for example:
+    enable_web_search = st.checkbox(
+        "Enable web search",
+        value=False,
+        help="Allow backend to use web search tools for eligible requests."
     )
 
     new_title = st.text_input("New session title")
@@ -193,7 +201,7 @@ else:
     prompt = st.chat_input("Send a message")
     if prompt:
         try:
-            send_chat(session_id, prompt, selected_model)
+            send_chat(session_id, prompt, selected_model, enable_web_search)
             st.rerun()
         except requests.RequestException as exc:
             st.error(f"Chat request failed: {exc}")

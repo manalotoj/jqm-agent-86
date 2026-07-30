@@ -20,6 +20,34 @@ from agent_86.tools.tool import ToolContext
 router = APIRouter(prefix="/sessions/{session_id}/chat", tags=["chat"])
 
 
+def is_web_search_enabled(metadata: dict | None) -> bool:
+    if not metadata:
+        return False
+
+    return bool(metadata.get("enable_web_search", False))
+
+
+def should_use_web_search(content: str) -> bool:
+    text = content.lower()
+
+    web_search_signals = [
+        "current",
+        "latest",
+        "today",
+        "news",
+        "recent",
+        "right now",
+        "check internet",
+        "on the internet",
+        "online",
+        "stock price",
+        "weather",
+        "score",
+    ]
+
+    return any(signal in text for signal in web_search_signals)
+
+
 def to_response(message: Message) -> MessageResponse:
     return MessageResponse(
         id=message.id,
@@ -71,13 +99,20 @@ async def chat(
         prompt=request.content,
     )
 
+    selected_model = model_router.choose_chat_model(request.metadata)
+
+    tool_names: list[str] = []
+
+    if is_web_search_enabled(request.metadata) and should_use_web_search(request.content):
+        tool_names.append("web_search")
+
     tool_results = await tool_service.execute_tools(
-        tool_names=request.tools,
+        tool_names=tool_names,
         query=request.content,
         context=ToolContext(
             session_id=session_id,
             user_id="local-dev-user",
-            metadata=request.metadata,
+            metadata=request.metadata or {},
         ),
     )
 
@@ -97,7 +132,6 @@ async def chat(
         )
 
     history = await message_service.list_messages(session_id)
-    selected_model = model_router.choose_chat_model(request.metadata)
 
     assistant_text = await chat_model_service.generate_reply(
         messages=history,
@@ -114,7 +148,7 @@ async def chat(
             metadata={
                 "source": "foundry",
                 "model": selected_model,
-                "tools": request.tools,
+                "tools": tool_names,
             },
         ),
     )
