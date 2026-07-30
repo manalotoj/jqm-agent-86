@@ -24,3 +24,9 @@ class MessageService:
         session_id: str,
     ) -> list[Message]:
         return await self._repository.list_messages(session_id)
+
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+    ) -> None:
+        await self._repository.delete_messages_for_session(session_id)

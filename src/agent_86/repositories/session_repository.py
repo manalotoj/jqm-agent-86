@@ -1,7 +1,7 @@
 from typing import Protocol
 
 from agent_86.domain.models.session import Session
-from agent_86.domain.schemas.session import CreateSessionRequest
+from agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
 
 
 class SessionRepository(Protocol):
@@ -20,3 +20,14 @@ class SessionRepository(Protocol):
         self,
         user_id: str,
     ) -> list[Session]: ...
+
+    async def update_session(
+        self,
+        session_id: str,
+        request: UpdateSessionRequest,
+    ) -> Session | None: ...
+
+    async def delete_session(
+        self,
+        session_id: str,
+    ) -> bool: ...

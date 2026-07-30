@@ -57,6 +57,18 @@ class CosmosMessageRepository:
 
         return messages
 
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+    ) -> None:
+        messages = await self.list_messages(session_id)
+
+        for message in messages:
+            await self._container.delete_item(
+                item=message.id,
+                partition_key=session_id,
+            )
+            
     def _to_document(self, message: Message) -> dict:
         return {
             "id": message.id,

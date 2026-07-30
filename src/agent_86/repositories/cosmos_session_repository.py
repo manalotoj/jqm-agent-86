@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from azure.cosmos import ContainerProxy
 
 from agent_86.domain.models.session import Session
-from agent_86.domain.schemas.session import CreateSessionRequest
+from agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
 
 
 class CosmosSessionRepository:
@@ -82,6 +82,40 @@ class CosmosSessionRepository:
 
         return sessions
 
+    async def update_session(
+        self,
+        session_id: str,
+        request: UpdateSessionRequest,
+    ) -> Session | None:
+        session = await self.get_session(session_id)
+        if session is None:
+            return None
+
+        session.title = request.title
+        session.updated_at = datetime.now(UTC)
+
+        updated = await self._container.replace_item(
+            item=session.id,
+            body=self._to_document(session),
+        )
+
+        return self._from_document(updated)
+
+    async def delete_session(
+        self,
+        session_id: str,
+    ) -> bool:
+        session = await self.get_session(session_id)
+        if session is None:
+            return False
+
+        await self._container.delete_item(
+            item=session.id,
+            partition_key=session.user_id,
+        )
+
+        return True
+    
     def _to_document(self, session: Session) -> dict:
         return {
             "id": session.id,

@@ -5,6 +5,7 @@ from agent_86.api.dependencies import (
     get_message_service,
     get_model_router,
     get_session_service,
+    get_tool_service,
 )
 from agent_86.domain.models.message import Message
 from agent_86.domain.schemas.chat import ChatRequest, ChatResponse
@@ -13,6 +14,8 @@ from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.tool import ToolContext
 
 router = APIRouter(prefix="/sessions/{session_id}/chat", tags=["chat"])
 
@@ -49,6 +52,7 @@ async def chat(
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
     model_router: ModelRouter = Depends(get_model_router),
+    tool_service: ToolService = Depends(get_tool_service),
 ) -> ChatResponse:
     await ensure_session_exists(session_id, session_service)
 
@@ -62,11 +66,43 @@ async def chat(
         ),
     )
 
+    await session_service.maybe_title_session_from_prompt(
+        session_id=session_id,
+        prompt=request.content,
+    )
+
+    tool_results = await tool_service.execute_tools(
+        tool_names=request.tools,
+        query=request.content,
+        context=ToolContext(
+            session_id=session_id,
+            user_id="local-dev-user",
+            metadata=request.metadata,
+        ),
+    )
+
+    for tool_result in tool_results:
+        await message_service.create_message(
+            session_id=session_id,
+            user_id="local-dev-user",
+            request=CreateMessageRequest(
+                role="system",
+                content=f"[tool:{tool_result.tool_name}] {tool_result.content}",
+                metadata={
+                    "source": "tool",
+                    "tool_name": tool_result.tool_name,
+                    **tool_result.metadata,
+                },
+            ),
+        )
+
     history = await message_service.list_messages(session_id)
     selected_model = model_router.choose_chat_model(request.metadata)
+
     assistant_text = await chat_model_service.generate_reply(
         messages=history,
         model=selected_model,
+        tool_results=tool_results,
     )
 
     assistant_message = await message_service.create_message(
@@ -78,6 +114,7 @@ async def chat(
             metadata={
                 "source": "foundry",
                 "model": selected_model,
+                "tools": request.tools,
             },
         ),
     )

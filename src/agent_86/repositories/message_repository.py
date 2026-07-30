@@ -16,3 +16,8 @@ class MessageRepository(Protocol):
         self,
         session_id: str,
     ) -> list[Message]: ...
+
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+    ) -> None: ...

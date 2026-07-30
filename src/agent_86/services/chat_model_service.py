@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 
 from agent_86.core.config import settings
 from agent_86.domain.models.message import Message
+from agent_86.tools.tool import ToolResult
 
 
 class ChatModelService:
@@ -26,11 +27,23 @@ class ChatModelService:
         self,
         messages: list[Message],
         model: str,
+        tool_results: list[ToolResult] | None = None,
     ) -> str:
-        prompt = "\n".join(
+        prompt_parts: list[str] = [
+            "You are a helpful assistant.",
+        ]
+
+        if tool_results:
+            prompt_parts.append(
+                "External tools were executed. Their results are included in the conversation history."
+            )
+
+        prompt_parts.extend(
             f"{message.role}: {message.content}"
             for message in messages
         )
+
+        prompt = "\n".join(prompt_parts)
 
         response = await self._client.responses.create(
             model=model,
