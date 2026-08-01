@@ -149,13 +149,6 @@ class ChatModelService:
                     ]
 
                 if not function_calls:
-                    transcript_events.append(
-                        GeneratedTranscriptMessage(
-                            role="assistant",
-                            content=output_text,
-                            metadata={"source": "model_response"},
-                        )
-                    )
                     return output_text
 
                 for call in function_calls:
