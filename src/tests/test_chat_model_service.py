@@ -1,69 +1,108 @@
-import sys
-import os
-import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+import pytest
 
 from agent_86.domain.models.message import Message
 from agent_86.services.chat_model_service import ChatModelService
-from agent_86.tools.tool import ToolResult
+from agent_86.tools.tool import ToolContext, ToolResult
+
+
+def build_service_with_mocked_responses(*responses):
+    service = ChatModelService.__new__(ChatModelService)
+    mock_create = AsyncMock(side_effect=list(responses))
+    service._client = SimpleNamespace(
+        responses=SimpleNamespace(create=mock_create),
+    )
+    return service, mock_create
+
 
 @pytest.mark.asyncio
-async def test_generate_reply_structured_input_with_tool_and_assistant_mock(monkeypatch):
-    service = ChatModelService()
+async def test_generate_reply_returns_final_text_without_transcript_for_plain_assistant_reply():
+    service, mock_create = build_service_with_mocked_responses(
+        SimpleNamespace(output_text="Hello! How can I help?")
+    )
+    tool_service = SimpleNamespace(execute_tools=AsyncMock(return_value=[]))
 
     history = [
-        Message(id="1", session_id="s1", user_id="u1", role="user", content="Hello, how are you?"),
-        Message(id="2", session_id="s1", user_id="u1", role="assistant", content="I am fine, thank you."),
-        Message(id="3", session_id="s1", user_id="u1", role="system", content="[tool:web_search] Found info about AI."),
-        Message(id="4", session_id="s1", user_id="u1", role="user", content="Can you tell me more about AI based on the info?"),
+        Message(
+            id="1",
+            session_id="s1",
+            user_id="u1",
+            role="user",
+            content="hello",
+        ),
     ]
 
-    tool_results = [
-        ToolResult(tool_name="web_search", content="Some search results")
-    ]
+    reply = await service.generate_reply(
+        messages=history,
+        model="gpt-5.4",
+        tool_service=tool_service,
+    )
 
-    mocked_response_text = "This is a mocked reply."
-
-    # Patch the responses.create method to avoid real API calls and capture the input passed to it
-    mock_create = AsyncMock(return_value=type("Response", (), {"output_text": mocked_response_text})())
-    monkeypatch.setattr(service._client.responses, "create", mock_create)
-
-    response_text = await service.generate_reply(messages=history, model="gpt-4.1-mini-2", tool_results=tool_results)
-
-    # Verify mocked call was made
     mock_create.assert_called_once()
-    call_args = mock_create.call_args.kwargs
-    input_payload = call_args.get("input")
+    assert reply.assistant_text == "Hello! How can I help?"
+    assert reply.transcript_messages == []
 
-    # Assert the input payload has correct role-conditional content types
-    assistant_content = next(
-        (msg for msg in input_payload if msg["role"] == "assistant"), None
+
+@pytest.mark.asyncio
+async def test_generate_reply_persists_only_tool_transcript_messages_before_final_reply():
+    service, mock_create = build_service_with_mocked_responses(
+        SimpleNamespace(
+            output_text="",
+            output=[
+                SimpleNamespace(
+                    type="function_call",
+                    call_id="call-1",
+                    name="web_search",
+                    arguments='{"query":"latest ai news"}',
+                )
+            ],
+        ),
+        SimpleNamespace(output_text="Here is the latest AI news summary."),
     )
-    tool_system_content = next(
-        (msg for msg in input_payload if msg["role"] == "system" and msg["content"][0]["text"].startswith("[tool:web_search]")),
-        None,
+
+    history = [
+        Message(
+            id="1",
+            session_id="s1",
+            user_id="u1",
+            role="user",
+            content="What is the latest AI news?",
+        ),
+    ]
+
+    tool_service = SimpleNamespace(
+        execute_tools=AsyncMock(
+            return_value=[
+                ToolResult(tool_name="web_search", content="Search results", metadata={})
+            ]
+        )
     )
-    synthetic_tool_message = next(
-        (msg for msg in input_payload if msg["role"] == "system" and msg["content"][0]["text"] == "External tools were executed. Their results are included in the conversation history."),
-        None,
+
+    reply = await service.generate_reply(
+        messages=history,
+        model="gpt-5.4",
+        tool_service=tool_service,
+        available_tool_names=["web_search"],
+        tool_context=ToolContext(session_id="s1", user_id="u1"),
     )
 
-    assert assistant_content is not None
-    assert tool_system_content is not None
-    assert synthetic_tool_message is not None
+    assert mock_create.await_count == 2
+    assert reply.assistant_text == "Here is the latest AI news summary."
+    assert len(reply.transcript_messages) == 2
 
-    # assistant content type should be output_text
-    assert assistant_content["content"][0]["type"] == "output_text"
+    tool_call_message, tool_output_message = reply.transcript_messages
 
-    # system messages content type should be input_text
-    assert tool_system_content["content"][0]["type"] == "input_text"
-    assert synthetic_tool_message["content"][0]["type"] == "input_text"
+    assert tool_call_message.role == "assistant"
+    assert tool_call_message.metadata["message_type"] == "function_call"
+    assert tool_call_message.metadata["tool_name"] == "web_search"
 
-    # Output text matches mocked response
-    assert response_text == mocked_response_text
+    assert tool_output_message.role == "tool"
+    assert tool_output_message.content == "Search results"
+    assert tool_output_message.metadata["message_type"] == "function_call_output"
 
-if __name__ == "__main__":
-    asyncio.run(test_generate_reply_structured_input_with_tool_and_assistant_mock())
+    assert all(
+        message.content != reply.assistant_text
+        for message in reply.transcript_messages
+    )
