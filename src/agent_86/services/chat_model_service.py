@@ -29,25 +29,46 @@ class ChatModelService:
         model: str,
         tool_results: list[ToolResult] | None = None,
     ) -> str:
-        prompt_parts: list[str] = [
-            "You are a helpful assistant.",
+        # Build a structured messages array for the Responses API
+        input_messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": "You are a helpful assistant."}
+                ],
+            }
         ]
 
+        # Optionally add system message about external tools
         if tool_results:
-            prompt_parts.append(
-                "External tools were executed. Their results are included in the conversation history."
+            input_messages.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "External tools were executed. Their results are included in the conversation history.",
+                        }
+                    ],
+                }
             )
 
-        prompt_parts.extend(
-            f"{message.role}: {message.content}"
-            for message in messages
-        )
 
-        prompt = "\n".join(prompt_parts)
+        def _content_type_for_role(role: str) -> str:
+            return "output_text" if role == "assistant" else "input_text"
+
+        # Append conversation messages as structured roles and contents
+        for message in messages:
+            input_messages.append(
+                {
+                    "role": message.role,
+                    "content": [{"type": _content_type_for_role(message.role), "text": message.content}],
+                }
+            )
 
         response = await self._client.responses.create(
             model=model,
-            input=prompt,
+            input=input_messages,
         )
 
         return response.output_text
