@@ -97,7 +97,6 @@ with st.sidebar:
         index=0,
     )
 
-    # Add this checkbox for Web Search toggle BEFORE the Create session button, for example:
     enable_web_search = st.checkbox(
         "Enable web search",
         value=False,
@@ -193,10 +192,16 @@ else:
 
     for message in messages:
         with st.chat_message(message["role"]):
-            st.write(message["content"])
-            model_used = message.get("metadata", {}).get("model")
-            if model_used:
-                st.caption(f"model: {model_used}")
+            message_type = message.get("metadata", {}).get("message_type", "")
+            if message_type == "function_call":
+                st.caption(f"Tool called: {message['content'][0].get('name', '')}")
+            elif message_type == "function_call_output":
+                st.markdown(f"**Tool output:**\n\n{message['content'][0].get('output', '')}")
+            else:
+                st.write(message["content"])
+                model_used = message.get("metadata", {}).get("model")
+                if model_used:
+                    st.caption(f"model: {model_used}")
 
     prompt = st.chat_input("Send a message")
     if prompt:

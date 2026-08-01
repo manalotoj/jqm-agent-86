@@ -106,45 +106,34 @@ async def chat(
     if is_web_search_enabled(request.metadata) and should_use_web_search(request.content):
         tool_names.append("web_search")
 
-    tool_results = await tool_service.execute_tools(
-        tool_names=tool_names,
-        query=request.content,
-        context=ToolContext(
-            session_id=session_id,
-            user_id="local-dev-user",
-            metadata=request.metadata or {},
-        ),
+    history = await message_service.list_messages(session_id)
+
+    reply = await chat_model_service.generate_reply(
+        messages=history,
+        model=selected_model,
+        tool_service=tool_service,
+        available_tool_names=tool_names,
+        tool_context=ToolContext(session_id=session_id, user_id="local-dev-user"),
     )
 
-    for tool_result in tool_results:
+    # Persist the transcript messages returned by the chat model service
+    for transcript_message in reply.transcript_messages:
         await message_service.create_message(
             session_id=session_id,
             user_id="local-dev-user",
             request=CreateMessageRequest(
-                role="system",
-                content=f"[tool:{tool_result.tool_name}] {tool_result.content}",
-                metadata={
-                    "source": "tool",
-                    "tool_name": tool_result.tool_name,
-                    **tool_result.metadata,
-                },
+                role=transcript_message.role,
+                content=transcript_message.content,
+                metadata=transcript_message.metadata,
             ),
         )
-
-    history = await message_service.list_messages(session_id)
-
-    assistant_text = await chat_model_service.generate_reply(
-        messages=history,
-        model=selected_model,
-        tool_results=tool_results,
-    )
 
     assistant_message = await message_service.create_message(
         session_id=session_id,
         user_id="local-dev-user",
         request=CreateMessageRequest(
             role="assistant",
-            content=assistant_text,
+            content=reply.assistant_text,
             metadata={
                 "source": "foundry",
                 "model": selected_model,

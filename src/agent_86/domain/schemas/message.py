@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-MessageRole = Literal["system", "user", "assistant"]
+MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
 class CreateMessageRequest(BaseModel):

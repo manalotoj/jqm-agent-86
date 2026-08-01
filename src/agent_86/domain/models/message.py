@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 
-MessageRole = Literal["system", "user", "assistant"]
+MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
 @dataclass
