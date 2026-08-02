@@ -130,6 +130,46 @@ In another terminal:
 streamlit run dev_ui.py
 ```
 
+### Optional: run the MCP stdio server
+
+Install the optional MCP dependency without changing the core app requirements:
+
+```bash
+pip install -r requirements.txt -r requirements-mcp.txt
+```
+
+Then start the stdio MCP server from the repository root:
+
+```bash
+PYTHONPATH=src python -m agent_86.mcp.server
+```
+
+This exposes the same registered tool layer used by agent-86's chat workflow, currently `web_search`, over MCP for local clients such as Cline.
+
+> **Context note:** MCP-originated tool calls use a deliberate synthetic `ToolContext` of `session_id="mcp-stdio"`, `user_id="mcp-client"`, and `metadata={"origin": "mcp", "transport": "stdio"}` because these calls do not originate from an agent-86 chat session.
+
+> **Future auth note:** stdio is sufficient for Phase 1 and local machine credentials, but it does not carry end-user delegated identity. If future Azure inspection tools require per-user delegated auth, a later transport/auth design will need to account for that.
+
+#### Cline MCP config
+
+Add this block to Cline's MCP server settings:
+
+```json
+{
+  "mcpServers": {
+    "agent-86": {
+      "command": "/bin/zsh",
+      "args": [
+        "-lc",
+        "cd /Users/johnmanaloto/source/github/jqm-agent-86 && PYTHONPATH=src python -m agent_86.mcp.server"
+      ]
+    }
+  }
+}
+```
+
+If you use a virtual environment, replace `python` in the command with that environment's interpreter.
+
 ### 5. Open the API docs
 
 - Swagger UI: `http://127.0.0.1:8000/docs`

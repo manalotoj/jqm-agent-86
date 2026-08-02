@@ -14,6 +14,20 @@ class WebSearchTool:
     def description(self) -> str:
         return "Searches the web for the given query."
 
+    @property
+    def input_schema(self) -> dict[str, object]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The web search query to run.",
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        }
+
     async def execute(
         self,
         query: str,

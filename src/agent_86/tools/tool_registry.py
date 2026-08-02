@@ -14,5 +14,8 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def list_tools(self) -> list[Tool]:
+        return [self._tools[name] for name in sorted(self._tools.keys())]
+
     def list_names(self) -> list[str]:
         return sorted(self._tools.keys())

@@ -1,5 +1,6 @@
 import requests
 import streamlit as st
+import json
 
 API_BASE_URL = "http://127.0.0.1:8000"
 MODEL_OPTIONS = [
@@ -66,6 +67,85 @@ def send_chat(session_id: str, content: str, model: str, enable_web_search: bool
     )
     response.raise_for_status()
     return response.json()
+
+
+def stream_chat(
+    session_id: str,
+    content: str,
+    model: str,
+    enable_web_search: bool,
+):
+    response = requests.post(
+        f"{API_BASE_URL}/sessions/{session_id}/chat/stream",
+        json={
+            "content": content,
+            "metadata": {
+                "source": "streamlit",
+                "model": model,
+                "enable_web_search": enable_web_search,
+            },
+        },
+        headers={"Accept": "text/event-stream"},
+        timeout=300,
+        stream=True,
+    )
+    response.raise_for_status()
+
+    event_name = "message"
+    data_lines: list[str] = []
+
+    try:
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if raw_line is None:
+                continue
+
+            line = raw_line.strip()
+            if not line:
+                if data_lines:
+                    payload = "\n".join(data_lines)
+                    yield {
+                        "event": event_name,
+                        "data": json.loads(payload) if payload else {},
+                    }
+                event_name = "message"
+                data_lines = []
+                continue
+
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").strip())
+
+        if data_lines:
+            payload = "\n".join(data_lines)
+            yield {
+                "event": event_name,
+                "data": json.loads(payload) if payload else {},
+            }
+    finally:
+        response.close()
+
+
+def render_message_content(message: dict) -> None:
+    metadata = message.get("metadata", {})
+    message_type = metadata.get("message_type", "")
+
+    if message_type == "function_call":
+        tool_name = metadata.get("tool_name", "unknown_tool")
+        arguments = metadata.get("arguments", "{}")
+        st.caption(f"Tool called: {tool_name}")
+        st.code(arguments, language="json")
+        return
+
+    if message_type == "function_call_output":
+        st.markdown("**Tool output:**")
+        st.write(message.get("content", ""))
+        return
+
+    st.write(message.get("content", ""))
+    model_used = metadata.get("model")
+    if model_used:
+        st.caption(f"model: {model_used}")
 
 
 st.set_page_config(page_title="agent-86", layout="wide")
@@ -192,21 +272,42 @@ else:
 
     for message in messages:
         with st.chat_message(message["role"]):
-            message_type = message.get("metadata", {}).get("message_type", "")
-            if message_type == "function_call":
-                st.caption(f"Tool called: {message['content'][0].get('name', '')}")
-            elif message_type == "function_call_output":
-                st.markdown(f"**Tool output:**\n\n{message['content'][0].get('output', '')}")
-            else:
-                st.write(message["content"])
-                model_used = message.get("metadata", {}).get("model")
-                if model_used:
-                    st.caption(f"model: {model_used}")
+            render_message_content(message)
 
     prompt = st.chat_input("Send a message")
     if prompt:
-        try:
-            send_chat(session_id, prompt, selected_model, enable_web_search)
-            st.rerun()
-        except requests.RequestException as exc:
-            st.error(f"Chat request failed: {exc}")
+        with st.chat_message("user"):
+            st.write(prompt)
+
+        with st.chat_message("assistant"):
+            response_placeholder = st.empty()
+            tool_status_placeholder = st.empty()
+            streamed_text = ""
+            tool_events: list[str] = []
+
+            try:
+                for event in stream_chat(session_id, prompt, selected_model, enable_web_search):
+                    event_name = event.get("event", "message")
+                    data = event.get("data", {})
+
+                    if event_name == "delta":
+                        streamed_text += data.get("text", "")
+                        response_placeholder.markdown(streamed_text or "…")
+                    elif event_name == "tool_call":
+                        tool_name = data.get("tool_name", "unknown_tool")
+                        tool_events.append(f"Calling tool: `{tool_name}`")
+                        tool_status_placeholder.markdown("\n\n".join(tool_events))
+                    elif event_name == "tool_result":
+                        tool_name = data.get("tool_name", "unknown_tool")
+                        content = data.get("content", "")
+                        tool_events.append(f"Tool result from `{tool_name}`:\n\n{content}")
+                        tool_status_placeholder.markdown("\n\n---\n\n".join(tool_events))
+                    elif event_name == "error":
+                        raise requests.RequestException(data.get("message", "Streaming request failed"))
+                    elif event_name == "complete":
+                        streamed_text = data.get("assistant_text", streamed_text)
+                        response_placeholder.markdown(streamed_text or "*(empty response)*")
+
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Chat request failed: {exc}")

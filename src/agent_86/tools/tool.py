@@ -23,6 +23,9 @@ class Tool(Protocol):
     @property
     def description(self) -> str: ...
 
+    @property
+    def input_schema(self) -> dict[str, Any]: ...
+
     async def execute(
         self,
         query: str,

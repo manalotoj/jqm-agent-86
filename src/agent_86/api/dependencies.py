@@ -7,12 +7,8 @@ from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
-
 from agent_86.services.tool_service import ToolService
-from agent_86.tools.tool_registry import ToolRegistry
-
-from agent_86.services.web_search_service import WebSearchService
-from agent_86.tools.web_search_tool import WebSearchTool
+from agent_86.tools.bootstrap import build_default_tool_service
 
 _cosmos_client = CosmosClient(
     settings.cosmos_endpoint,
@@ -36,16 +32,9 @@ _message_repository = CosmosMessageRepository(_messages_container)
 _session_service = SessionService(_session_repository)
 _message_service = MessageService(_message_repository)
 _chat_model_service = ChatModelService()
-_web_search_service = WebSearchService()
 
 _model_router = ModelRouter()
-
-_tool_registry = ToolRegistry(
-    tools=[
-        WebSearchTool(_web_search_service),
-    ]
-)
-_tool_service = ToolService(_tool_registry)
+_tool_service = build_default_tool_service()
 
 
 def get_session_service() -> SessionService:
