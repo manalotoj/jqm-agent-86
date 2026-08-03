@@ -116,13 +116,32 @@ TAVILY_API_KEY=
 BRAVE_SEARCH_API_KEY=
 ```
 
-### 3. Run the FastAPI backend
+### 3. Start both the API and UI together
+
+From the repository root:
+
+```bash
+zsh scripts/start_local.zsh
+```
+
+The helper script:
+
+- prefers the repo-local `.venv` when present
+- starts the FastAPI API on `http://127.0.0.1:8000`
+- starts the Streamlit UI on `http://127.0.0.1:8501`
+- stops both processes when you press `Ctrl+C`
+
+### 4. Run them manually instead
+
+If you prefer separate terminals, use the existing manual commands.
+
+#### FastAPI backend
 
 ```bash
 PYTHONPATH=src uvicorn agent_86.main:app --reload
 ```
 
-### 4. Run the Streamlit development UI
+#### Streamlit development UI
 
 In another terminal:
 
@@ -141,7 +160,7 @@ pip install -r requirements.txt -r requirements-mcp.txt
 Then start the stdio MCP server from the repository root:
 
 ```bash
-PYTHONPATH=src python -m agent_86.mcp.server
+zsh scripts/start_mcp.zsh
 ```
 
 This exposes the same registered tool layer used by agent-86's chat workflow, currently `web_search`, over MCP for local clients such as Cline.
@@ -161,14 +180,14 @@ Add this block to Cline's MCP server settings:
       "command": "/bin/zsh",
       "args": [
         "-lc",
-        "cd /Users/johnmanaloto/source/github/jqm-agent-86 && PYTHONPATH=src python -m agent_86.mcp.server"
+        "cd /Users/johnmanaloto/source/github/jqm-agent-86 && zsh scripts/start_mcp.zsh"
       ]
     }
   }
 }
 ```
 
-If you use a virtual environment, replace `python` in the command with that environment's interpreter.
+The helper script already prefers the repo-local `.venv` when present, so you usually do not need to hardcode a Python interpreter into the Cline config.
 
 ### 5. Open the API docs
 
