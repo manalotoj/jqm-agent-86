@@ -5,6 +5,8 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from agent_86.auth.dependencies import get_authenticated_user
+from agent_86.auth.models import AuthenticatedUser
 from agent_86.api.dependencies import (
     get_chat_model_service,
     get_message_service,
@@ -23,7 +25,6 @@ from agent_86.services.tool_service import ToolService
 from agent_86.tools.tool import ToolContext
 
 router = APIRouter(prefix="/sessions/{session_id}/chat", tags=["chat"])
-LOCAL_USER_ID = "local-dev-user"
 
 
 def is_web_search_enabled(metadata: dict | None) -> bool:
@@ -67,10 +68,11 @@ def to_response(message: Message) -> MessageResponse:
 
 
 async def ensure_session_exists(
+    user_id: str,
     session_id: str,
     session_service: SessionService,
 ) -> None:
-    session = await session_service.get_session(session_id)
+    session = await session_service.get_session(user_id, session_id)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -96,13 +98,14 @@ def build_assistant_metadata(selected_model: str, tool_names: list[str]) -> dict
 
 
 async def create_user_message(
+    user_id: str,
     session_id: str,
     request: ChatRequest,
     message_service: MessageService,
 ) -> None:
     await message_service.create_message(
         session_id=session_id,
-        user_id=LOCAL_USER_ID,
+        user_id=user_id,
         request=CreateMessageRequest(
             role="user",
             content=request.content,
@@ -112,6 +115,7 @@ async def create_user_message(
 
 
 async def persist_transcript_messages(
+    user_id: str,
     session_id: str,
     transcript_messages,
     message_service: MessageService,
@@ -119,7 +123,7 @@ async def persist_transcript_messages(
     for transcript_message in transcript_messages:
         await message_service.create_message(
             session_id=session_id,
-            user_id=LOCAL_USER_ID,
+            user_id=user_id,
             request=CreateMessageRequest(
                 role=transcript_message.role,
                 content=transcript_message.content,
@@ -129,6 +133,7 @@ async def persist_transcript_messages(
 
 
 async def persist_assistant_message(
+    user_id: str,
     session_id: str,
     reply: ChatModelReply,
     selected_model: str,
@@ -136,6 +141,7 @@ async def persist_assistant_message(
     message_service: MessageService,
 ) -> Message:
     await persist_transcript_messages(
+        user_id=user_id,
         session_id=session_id,
         transcript_messages=reply.transcript_messages,
         message_service=message_service,
@@ -143,7 +149,7 @@ async def persist_assistant_message(
 
     return await message_service.create_message(
         session_id=session_id,
-        user_id=LOCAL_USER_ID,
+        user_id=user_id,
         request=CreateMessageRequest(
             role="assistant",
             content=reply.assistant_text,
@@ -153,6 +159,7 @@ async def persist_assistant_message(
 
 
 async def prepare_chat_context(
+    user_id: str,
     session_id: str,
     request: ChatRequest,
     *,
@@ -160,16 +167,17 @@ async def prepare_chat_context(
     session_service: SessionService,
     model_router: ModelRouter,
 ) -> tuple[str, list[str], list[Message]]:
-    await create_user_message(session_id, request, message_service)
+    await create_user_message(user_id, session_id, request, message_service)
 
     await session_service.maybe_title_session_from_prompt(
+        user_id=user_id,
         session_id=session_id,
         prompt=request.content,
     )
 
     selected_model = model_router.choose_chat_model(request.metadata)
     tool_names = choose_tool_names(request.content, request.metadata)
-    history = await message_service.list_messages(session_id)
+    history = await message_service.list_messages(user_id, session_id)
 
     return selected_model, tool_names, history
 
@@ -186,15 +194,17 @@ def encode_sse(event: ChatStreamEventSchema) -> str:
 async def chat(
     session_id: str,
     request: ChatRequest,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     message_service: MessageService = Depends(get_message_service),
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
     model_router: ModelRouter = Depends(get_model_router),
     tool_service: ToolService = Depends(get_tool_service),
 ) -> ChatResponse:
-    await ensure_session_exists(session_id, session_service)
+    await ensure_session_exists(user.user_id, session_id, session_service)
 
     selected_model, tool_names, history = await prepare_chat_context(
+        user_id=user.user_id,
         session_id=session_id,
         request=request,
         message_service=message_service,
@@ -207,10 +217,11 @@ async def chat(
         model=selected_model,
         tool_service=tool_service,
         available_tool_names=tool_names,
-        tool_context=ToolContext(session_id=session_id, user_id=LOCAL_USER_ID),
+        tool_context=ToolContext(session_id=session_id, user_id=user.user_id),
     )
 
     assistant_message = await persist_assistant_message(
+        user_id=user.user_id,
         session_id=session_id,
         reply=reply,
         selected_model=selected_model,
@@ -225,18 +236,20 @@ async def chat(
 async def chat_stream(
     session_id: str,
     request: ChatRequest,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     message_service: MessageService = Depends(get_message_service),
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
     model_router: ModelRouter = Depends(get_model_router),
     tool_service: ToolService = Depends(get_tool_service),
 ) -> StreamingResponse:
-    await ensure_session_exists(session_id, session_service)
+    await ensure_session_exists(user.user_id, session_id, session_service)
 
     async def event_generator() -> AsyncIterator[str]:
         queue: asyncio.Queue[ChatStreamEventSchema] = asyncio.Queue()
 
         selected_model, tool_names, history = await prepare_chat_context(
+            user_id=user.user_id,
             session_id=session_id,
             request=request,
             message_service=message_service,
@@ -265,11 +278,12 @@ async def chat_stream(
                     model=selected_model,
                     tool_service=tool_service,
                     available_tool_names=tool_names,
-                    tool_context=ToolContext(session_id=session_id, user_id=LOCAL_USER_ID),
+                    tool_context=ToolContext(session_id=session_id, user_id=user.user_id),
                     event_callback=on_chat_event,
                 )
 
                 assistant_message = await persist_assistant_message(
+                    user_id=user.user_id,
                     session_id=session_id,
                     reply=reply,
                     selected_model=selected_model,

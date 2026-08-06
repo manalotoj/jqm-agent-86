@@ -30,9 +30,10 @@ class SessionService:
 
     async def get_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> Session | None:
-        return await self._repository.get_session(session_id)
+        return await self._repository.get_session(user_id, session_id)
 
     async def list_sessions(
         self,
@@ -42,23 +43,26 @@ class SessionService:
 
     async def update_session(
         self,
+        user_id: str,
         session_id: str,
         request: UpdateSessionRequest,
     ) -> Session | None:
-        return await self._repository.update_session(session_id, request)
+        return await self._repository.update_session(user_id, session_id, request)
 
     async def delete_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> bool:
-        return await self._repository.delete_session(session_id)
+        return await self._repository.delete_session(user_id, session_id)
 
     async def maybe_title_session_from_prompt(
         self,
+        user_id: str,
         session_id: str,
         prompt: str,
     ) -> Session | None:
-        session = await self._repository.get_session(session_id)
+        session = await self._repository.get_session(user_id, session_id)
         if session is None:
             return None
 
@@ -68,6 +72,7 @@ class SessionService:
         derived_title = self._derive_title_from_prompt(prompt)
 
         return await self._repository.update_session(
+            user_id,
             session_id,
             UpdateSessionRequest(title=derived_title),
         )

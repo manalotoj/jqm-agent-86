@@ -13,6 +13,7 @@ class SessionRepository(Protocol):
 
     async def get_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> Session | None: ...
 
@@ -23,11 +24,13 @@ class SessionRepository(Protocol):
 
     async def update_session(
         self,
+        user_id: str,
         session_id: str,
         request: UpdateSessionRequest,
     ) -> Session | None: ...
 
     async def delete_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> bool: ...

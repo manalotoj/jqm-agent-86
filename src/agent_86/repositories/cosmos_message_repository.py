@@ -34,17 +34,19 @@ class CosmosMessageRepository:
 
     async def list_messages(
         self,
+        user_id: str,
         session_id: str,
     ) -> list[Message]:
         query = """
         SELECT *
         FROM c
-        WHERE c.session_id = @session_id
+        WHERE c.session_id = @session_id AND c.user_id = @user_id
         ORDER BY c.created_at ASC
         """
 
         parameters = [
             {"name": "@session_id", "value": session_id},
+            {"name": "@user_id", "value": user_id},
         ]
 
         messages: list[Message] = []
@@ -52,6 +54,7 @@ class CosmosMessageRepository:
         async for item in self._container.query_items(
             query=query,
             parameters=parameters,
+            partition_key=session_id,
         ):
             messages.append(self._from_document(item))
 
@@ -59,9 +62,10 @@ class CosmosMessageRepository:
 
     async def delete_messages_for_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> None:
-        messages = await self.list_messages(session_id)
+        messages = await self.list_messages(user_id, session_id)
 
         for message in messages:
             await self._container.delete_item(

@@ -1,8 +1,8 @@
 # agent-86
 
-agent-86 is a local-first, Azure-oriented AI agent backend built with FastAPI. It supports persistent chat sessions, message history stored in Azure Cosmos DB, model routing between default and premium chat models, and optional tool use for web search.
+agent-86 is a local-first, Azure-oriented AI agent backend built with FastAPI. It supports persistent chat sessions, message history stored in Azure Cosmos DB, model routing between default and premium chat models, optional tool use for web search, and Microsoft Entra ID delegated user authentication for both the Streamlit UI and FastAPI API.
 
-The repository also includes a lightweight Streamlit development UI for exercising the API locally.
+The repository also includes a Streamlit development UI that signs the user in with Microsoft Entra ID, acquires a delegated access token with OAuth 2.0 Authorization Code Flow, and calls the backend API with `Authorization: Bearer <access_token>`.
 
 ## Current Features
 
@@ -13,6 +13,9 @@ The repository also includes a lightweight Streamlit development UI for exercisi
 - Model routing between configured default and premium models
 - Optional web search tool support during chat
 - Streamlit development UI for local testing
+- Microsoft Entra ID Authorization Code Flow for interactive sign-in
+- Backend bearer-token validation via OpenID metadata discovery and JWKS signing keys
+- Per-user ownership enforcement for sessions and messages
 
 ## Architecture Summary
 
@@ -21,7 +24,8 @@ The repository also includes a lightweight Streamlit development UI for exercisi
 - **Azure OpenAI / Foundry-compatible API access** powers chat completions
 - **Service layer orchestration** keeps routing, chat, and persistence logic separated
 - **Tool abstraction layer** allows the model to invoke tools such as web search
-- **Streamlit** provides a simple local chat interface for development
+- **Microsoft Entra ID** issues delegated user access tokens for the backend API
+- **Streamlit** provides a local authenticated chat interface for development
 
 ## Project Structure
 
@@ -43,20 +47,21 @@ scripts/          helper scripts, including local Cosmos DB setup
 
 At a high level, the application works like this:
 
-1. A client creates or selects a chat session.
-2. Messages are stored in Azure Cosmos DB.
-3. A chat request is posted to `/sessions/{session_id}/chat`.
-4. The API persists the user message and may derive a session title from the first prompt.
-5. The request metadata is used to choose the configured model tier.
-6. If enabled and relevant, the API makes the `web_search` tool available to the model.
-7. The model generates a response, optionally invoking tools through the tool service.
-8. Tool transcript messages and the final assistant reply are persisted.
+1. The Streamlit UI redirects an unauthenticated user to Microsoft Entra ID.
+2. Microsoft Entra ID returns an authorization code to the configured Streamlit callback URI.
+3. The UI exchanges the code for delegated tokens with MSAL and caches/refreshes them for the current Streamlit session.
+4. The UI calls the FastAPI backend with `Authorization: Bearer <access_token>`.
+5. The API validates the bearer token against Microsoft identity platform metadata and signing keys.
+6. The API resolves the authenticated user identity from `oid` or falls back to `sub`.
+7. Sessions and messages are filtered by `user_id`, and cross-user access returns `404`.
+8. Chat requests persist the user message, run model/tool orchestration, and persist transcript plus assistant output.
 
 ## Requirements
 
 - Python 3.12+
 - An Azure Cosmos DB account, emulator, or equivalent reachable endpoint
 - An Azure OpenAI / Foundry-compatible chat endpoint
+- A Microsoft Entra tenant with two app registrations (UI and backend API)
 - Optional Tavily or Brave Search API key for web search support
 
 ## Configuration
@@ -74,15 +79,74 @@ Important settings include:
 - `COSMOS_MESSAGES_CONTAINER_NAME`
 - `COSMOS_VERIFY_SSL`
 - `FOUNDRY_OPENAI_BASE_URL`
+- `FOUNDRY_OPENAI_API_KEY`
 - `FOUNDRY_DEFAULT_CHAT_MODEL`
 - `FOUNDRY_PREMIUM_CHAT_MODEL`
 - `AZURE_OPENAI_VERIFY_SSL`
+- `ENTRA_TENANT_ID`
+- `ENTRA_API_CLIENT_ID`
+- `ENTRA_API_AUDIENCE`
+- `ENTRA_UI_CLIENT_ID` *(UI only)*
+- `ENTRA_UI_CLIENT_SECRET` *(UI only)*
+- `ENTRA_REDIRECT_URI` *(UI only)*
 - `TAVILY_API_KEY` *(optional)*
 - `BRAVE_SEARCH_API_KEY` *(optional)*
 - `WEB_SEARCH_TIMEOUT_SECONDS`
 - `WEB_SEARCH_MAX_RESULTS`
 
 See `src/agent_86/core/config.py` for the full set of supported settings.
+
+## Microsoft Entra ID Setup
+
+This project uses **two separate Microsoft Entra app registrations**.
+
+### App registration 1: Streamlit UI
+
+Purpose: interactive user sign-in.
+
+- Platform: **Web**
+- Client type: **confidential client**
+- Flow: **OAuth 2.0 Authorization Code Flow** via MSAL Python
+- Redirect URI (local development):
+
+  ```text
+  http://localhost:8501/oauth2callback
+  ```
+
+- Client secret: required
+- Delegated API permission to the backend API scope:
+
+  ```text
+  api://<backend-client-id>/access_as_user
+  ```
+
+Do not add Microsoft Graph permissions unless the UI actually needs Graph.
+
+### App registration 2: FastAPI backend API
+
+Purpose: protect API endpoints.
+
+- Supported account types: **Accounts in this organizational directory only**
+- Tenant mode: **single tenant**
+- Expose an API with:
+
+  ```text
+  Application ID URI: api://<backend-client-id>
+  Scope name: access_as_user
+  Full scope: api://<backend-client-id>/access_as_user
+  ```
+
+The Streamlit UI requests that delegated scope during sign-in.
+
+### Authentication behavior in this repo
+
+- The Streamlit UI uses MSAL's authorization-code flow support.
+- The UI keeps one long-lived MSAL client per Streamlit session.
+- Access tokens are refreshed before expiry when possible.
+- Backend requests retry once after a `401` with a refreshed token.
+- The FastAPI API validates bearer tokens using OpenID Connect metadata and JWKS keys from Microsoft Entra ID.
+- The backend resolves the user identity from `oid`, falling back to `sub` only when `oid` is absent.
+- The backend refuses startup when required auth configuration is missing.
 
 ## Local Development
 
@@ -94,7 +158,7 @@ pip install -r requirements.txt
 
 ### 2. Configure environment variables
 
-Create a `.env` file in the repository root and provide the required Cosmos DB and model settings.
+Create a `.env` file in the repository root and provide the required Cosmos DB, model, and Entra settings.
 
 Example:
 
@@ -109,12 +173,34 @@ COSMOS_SESSIONS_CONTAINER_NAME=sessions
 COSMOS_MESSAGES_CONTAINER_NAME=messages
 
 FOUNDRY_OPENAI_BASE_URL=https://your-foundry-or-openai-endpoint/
+FOUNDRY_OPENAI_API_KEY=your-openai-or-foundry-key
 FOUNDRY_DEFAULT_CHAT_MODEL=gpt-4.1-mini
 FOUNDRY_PREMIUM_CHAT_MODEL=gpt-5.4
+
+ENTRA_TENANT_ID=your-tenant-id
+ENTRA_API_CLIENT_ID=your-backend-api-app-client-id
+ENTRA_API_AUDIENCE=api://your-backend-api-app-client-id
+ENTRA_UI_CLIENT_ID=your-streamlit-ui-app-client-id
+ENTRA_UI_CLIENT_SECRET=your-streamlit-ui-client-secret
+ENTRA_REDIRECT_URI=http://localhost:8501/oauth2callback
 
 TAVILY_API_KEY=
 BRAVE_SEARCH_API_KEY=
 ```
+
+The backend requires these authentication variables at startup:
+
+- `ENTRA_TENANT_ID`
+- `ENTRA_API_CLIENT_ID`
+- `ENTRA_API_AUDIENCE`
+
+The Streamlit UI requires these variables at runtime:
+
+- `ENTRA_UI_CLIENT_ID`
+- `ENTRA_UI_CLIENT_SECRET`
+- `ENTRA_REDIRECT_URI`
+
+There is no authentication bypass mode.
 
 ### 3. Start both the API and UI together
 
@@ -129,6 +215,7 @@ The helper script:
 - prefers the repo-local `.venv` when present
 - starts the FastAPI API on `http://127.0.0.1:8000`
 - starts the Streamlit UI on `http://127.0.0.1:8501`
+- expects valid Entra configuration for both backend and UI
 - stops both processes when you press `Ctrl+C`
 
 ### 4. Run them manually instead
@@ -216,6 +303,7 @@ The helper script already prefers the repo-local `.venv` when present, so you us
 ### Chat
 
 - `POST /sessions/{session_id}/chat` — send a user prompt and receive a persisted assistant reply
+- `POST /sessions/{session_id}/chat/stream` — stream chat events over Server-Sent Events
 
 The chat endpoint currently:
 
@@ -230,6 +318,9 @@ The chat endpoint currently:
 
 `dev_ui.py` is a Streamlit-based frontend that can:
 
+- redirect unauthenticated users to Microsoft Entra ID
+- receive the authorization code callback and exchange it for tokens
+- cache and refresh delegated API access tokens
 - list existing sessions
 - create, rename, and delete sessions
 - view session history
@@ -237,13 +328,14 @@ The chat endpoint currently:
 - enable optional web search
 - send prompts to the backend chat endpoint
 
+Every backend request from the UI, including streaming chat requests, includes the delegated bearer token.
+
 ## Current Limitations
 
-- Local development currently uses a hardcoded user identity (`local-dev-user`)
-- Production authentication and authorization are not implemented yet
 - The current tool set is minimal and focused on web search
 - Web search only works when a provider key is configured and the request looks search-worthy
 - Persistence depends on a reachable Cosmos DB endpoint and configured containers
+- The backend is currently structured for single-tenant Entra validation; future multi-tenant support should only require auth configuration changes rather than business-logic changes
 
 ## Roadmap
 
@@ -253,7 +345,7 @@ Near-term focus areas still include:
 - better observability and smoke tests
 - additional tool integrations such as Azure inspection and GitHub access
 - future file upload, artifact storage, and generated output workflows
-- eventual Entra-based authentication and production hardening
+- additional production hardening beyond the current Entra auth baseline
 
 ## Additional Docs
 
@@ -263,4 +355,4 @@ Near-term focus areas still include:
 
 ## Status
 
-This repository now contains a working implementation of the initial backend slice. The current focus is improving documentation, extending tools, and evolving the app toward a more production-capable Azure-native agent platform.
+This repository now contains a working authenticated backend/UI slice with delegated Microsoft Entra ID sign-in, per-user resource ownership, and offline auth test coverage. The current focus is improving documentation, extending tools, and evolving the app toward a more production-capable Azure-native agent platform.

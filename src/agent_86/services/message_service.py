@@ -21,12 +21,14 @@ class MessageService:
 
     async def list_messages(
         self,
+        user_id: str,
         session_id: str,
     ) -> list[Message]:
-        return await self._repository.list_messages(session_id)
+        return await self._repository.list_messages(user_id, session_id)
 
     async def delete_messages_for_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> None:
-        await self._repository.delete_messages_for_session(session_id)
+        await self._repository.delete_messages_for_session(user_id, session_id)

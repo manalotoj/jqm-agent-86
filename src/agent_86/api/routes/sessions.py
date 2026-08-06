@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
+from agent_86.auth.dependencies import get_authenticated_user
+from agent_86.auth.models import AuthenticatedUser
 from agent_86.api.dependencies import get_message_service, get_session_service
 from agent_86.domain.models.session import Session
 from agent_86.domain.schemas.session import (
@@ -27,10 +29,11 @@ def to_response(session: Session) -> SessionResponse:
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
     request: CreateSessionRequest,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     session_service: SessionService = Depends(get_session_service),
 ) -> SessionResponse:
     session = await session_service.create_session(
-        user_id="local-dev-user",
+        user_id=user.user_id,
         request=request,
     )
     return to_response(session)
@@ -38,18 +41,20 @@ async def create_session(
 
 @router.get("", response_model=list[SessionResponse])
 async def list_sessions(
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     session_service: SessionService = Depends(get_session_service),
 ) -> list[SessionResponse]:
-    sessions = await session_service.list_sessions(user_id="local-dev-user")
+    sessions = await session_service.list_sessions(user_id=user.user_id)
     return [to_response(session) for session in sessions]
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     session_service: SessionService = Depends(get_session_service),
 ) -> SessionResponse:
-    session = await session_service.get_session(session_id)
+    session = await session_service.get_session(user.user_id, session_id)
 
     if session is None:
         raise HTTPException(
@@ -64,9 +69,10 @@ async def get_session(
 async def update_session(
     session_id: str,
     request: UpdateSessionRequest,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     session_service: SessionService = Depends(get_session_service),
 ) -> SessionResponse:
-    session = await session_service.update_session(session_id, request)
+    session = await session_service.update_session(user.user_id, session_id, request)
 
     if session is None:
         raise HTTPException(
@@ -80,10 +86,11 @@ async def update_session(
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(
     session_id: str,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     session_service: SessionService = Depends(get_session_service),
     message_service: MessageService = Depends(get_message_service),
 ) -> Response:
-    session = await session_service.get_session(session_id)
+    session = await session_service.get_session(user.user_id, session_id)
 
     if session is None:
         raise HTTPException(
@@ -91,7 +98,7 @@ async def delete_session(
             detail=f"Session '{session_id}' not found",
         )
 
-    await message_service.delete_messages_for_session(session_id)
-    await session_service.delete_session(session_id)
+    await message_service.delete_messages_for_session(user.user_id, session_id)
+    await session_service.delete_session(user.user_id, session_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,10 +1,11 @@
 import httpx
 
-from agent_86.core.config import settings
+from agent_86.core.config import Settings
 
 
 class WebSearchService:
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
         self._timeout = settings.web_search_timeout_seconds
         self._max_results = settings.web_search_max_results
 
@@ -27,12 +28,12 @@ class WebSearchService:
         )
 
     async def _search_tavily(self, query: str) -> tuple[str, dict] | None:
-        if not settings.tavily_api_key:
+        if not self._settings.tavily_api_key:
             return None
 
         url = "https://api.tavily.com/search"
         payload = {
-            "api_key": settings.tavily_api_key,
+            "api_key": self._settings.tavily_api_key,
             "query": query,
             "max_results": self._max_results,
         }
@@ -76,13 +77,13 @@ class WebSearchService:
         )
 
     async def _search_brave(self, query: str) -> tuple[str, dict] | None:
-        if not settings.brave_search_api_key:
+        if not self._settings.brave_search_api_key:
             return None
 
         url = "https://api.search.brave.com/res/v1/web/search"
         headers = {
             "Accept": "application/json",
-            "X-Subscription-Token": settings.brave_search_api_key,
+            "X-Subscription-Token": self._settings.brave_search_api_key,
         }
         params = {
             "q": query,

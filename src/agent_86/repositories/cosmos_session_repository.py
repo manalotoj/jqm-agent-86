@@ -33,22 +33,25 @@ class CosmosSessionRepository:
 
     async def get_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> Session | None:
         query = """
         SELECT *
         FROM c
-        WHERE c.id = @session_id
+        WHERE c.id = @session_id AND c.user_id = @user_id
         """
 
         parameters = [
             {"name": "@session_id", "value": session_id},
+            {"name": "@user_id", "value": user_id},
         ]
 
         items = []
         async for item in self._container.query_items(
             query=query,
             parameters=parameters,
+            partition_key=user_id,
         ):
             items.append(item)
 
@@ -84,10 +87,11 @@ class CosmosSessionRepository:
 
     async def update_session(
         self,
+        user_id: str,
         session_id: str,
         request: UpdateSessionRequest,
     ) -> Session | None:
-        session = await self.get_session(session_id)
+        session = await self.get_session(user_id, session_id)
         if session is None:
             return None
 
@@ -97,15 +101,17 @@ class CosmosSessionRepository:
         updated = await self._container.replace_item(
             item=session.id,
             body=self._to_document(session),
+            partition_key=session.user_id,
         )
 
         return self._from_document(updated)
 
     async def delete_session(
         self,
+        user_id: str,
         session_id: str,
     ) -> bool:
-        session = await self.get_session(session_id)
+        session = await self.get_session(user_id, session_id)
         if session is None:
             return False
 

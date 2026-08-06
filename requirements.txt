@@ -4,9 +4,12 @@ pydantic
 pydantic-settings
 streamlit
 requests
+msal
 openai
 azure-identity
 azure-cosmos
 httpx
+PyJWT
+cryptography
 pytest
 pytest-asyncio
