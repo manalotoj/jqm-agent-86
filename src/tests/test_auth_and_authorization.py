@@ -28,7 +28,7 @@ from agent_86.api.dependencies import (
 )
 from agent_86.auth.dependencies import get_token_validator
 from agent_86.auth.provider import TokenValidationError
-from agent_86.core.config import Settings, get_settings
+from agent_86.core.config import get_settings
 from agent_86.domain.models.message import Message
 from agent_86.domain.schemas.message import CreateMessageRequest
 from agent_86.domain.schemas.session import CreateSessionRequest
@@ -118,12 +118,8 @@ def configured_environment(monkeypatch: pytest.MonkeyPatch):
     for key, value in values.items():
         monkeypatch.setenv(key, value)
 
-    original_env_file = Settings.model_config.get("env_file")
-    Settings.model_config["env_file"] = None
-
     clear_settings_caches()
     yield
-    Settings.model_config["env_file"] = original_env_file
     clear_settings_caches()
 
 

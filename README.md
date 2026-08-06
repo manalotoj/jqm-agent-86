@@ -66,7 +66,13 @@ At a high level, the application works like this:
 
 ## Configuration
 
-The app loads settings from environment variables and an optional `.env` file.
+The app code reads configuration from environment variables.
+
+For local development, this repo uses split env files that are loaded by `scripts/start_local.zsh`:
+
+- `.env.common` for values shared by API and UI
+- `.env.api` for FastAPI-only settings
+- `.env.ui` for Streamlit-only settings
 
 Important settings include:
 
@@ -156,16 +162,40 @@ The Streamlit UI requests that delegated scope during sign-in.
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment variables
+### 2. Configure local environment files
 
-Create a `.env` file in the repository root and provide the required Cosmos DB, model, and Entra settings.
+Create these files in the repository root:
 
-Example:
+- `.env.common`
+- `.env.api`
+- `.env.ui`
+
+You can copy from the checked-in examples:
+
+```bash
+cp .env.common.example .env.common
+cp .env.api.example .env.api
+cp .env.ui.example .env.ui
+```
+
+#### `.env.common`
+
+Shared settings used by both the FastAPI API and the Streamlit UI:
 
 ```env
 APP_NAME=agent-86
 APP_ENV=dev
 
+ENTRA_TENANT_ID=your-tenant-id
+ENTRA_API_CLIENT_ID=your-backend-api-app-client-id
+ENTRA_API_AUDIENCE=api://your-backend-api-app-client-id
+```
+
+#### `.env.api`
+
+Backend-only settings:
+
+```env
 COSMOS_ENDPOINT=https://your-cosmos-account.documents.azure.com:443/
 COSMOS_KEY=your-cosmos-key
 COSMOS_DATABASE_NAME=agent86
@@ -177,15 +207,19 @@ FOUNDRY_OPENAI_API_KEY=your-openai-or-foundry-key
 FOUNDRY_DEFAULT_CHAT_MODEL=gpt-4.1-mini
 FOUNDRY_PREMIUM_CHAT_MODEL=gpt-5.4
 
-ENTRA_TENANT_ID=your-tenant-id
-ENTRA_API_CLIENT_ID=your-backend-api-app-client-id
-ENTRA_API_AUDIENCE=api://your-backend-api-app-client-id
+TAVILY_API_KEY=
+BRAVE_SEARCH_API_KEY=
+```
+
+#### `.env.ui`
+
+UI-only settings:
+
+```env
 ENTRA_UI_CLIENT_ID=your-streamlit-ui-app-client-id
 ENTRA_UI_CLIENT_SECRET=your-streamlit-ui-client-secret
 ENTRA_REDIRECT_URI=http://localhost:8501/oauth2callback
-
-TAVILY_API_KEY=
-BRAVE_SEARCH_API_KEY=
+API_BASE_URL=http://127.0.0.1:8000
 ```
 
 The backend requires these authentication variables at startup:
@@ -201,6 +235,13 @@ The Streamlit UI requires these variables at runtime:
 - `ENTRA_REDIRECT_URI`
 
 There is no authentication bypass mode.
+
+When you use `zsh scripts/start_local.zsh`, the script loads:
+
+- `.env.common` + `.env.api` for the FastAPI process
+- `.env.common` + `.env.ui` for the Streamlit process
+
+If one or more files do not exist, the script falls back to already-exported environment variables.
 
 ### 3. Start both the API and UI together
 
@@ -220,11 +261,15 @@ The helper script:
 
 ### 4. Run them manually instead
 
-If you prefer separate terminals, use the existing manual commands.
+If you prefer separate terminals, load the same env files yourself before starting each process.
 
 #### FastAPI backend
 
 ```bash
+set -a
+source .env.common
+source .env.api
+set +a
 PYTHONPATH=src uvicorn agent_86.main:app --reload
 ```
 
@@ -233,6 +278,10 @@ PYTHONPATH=src uvicorn agent_86.main:app --reload
 In another terminal:
 
 ```bash
+set -a
+source .env.common
+source .env.ui
+set +a
 streamlit run dev_ui.py
 ```
 

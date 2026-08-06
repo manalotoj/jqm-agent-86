@@ -29,6 +29,10 @@ API_HOST="127.0.0.1"
 API_PORT="8000"
 UI_PORT="8501"
 
+COMMON_ENV_FILE="${REPO_ROOT}/.env.common"
+API_ENV_FILE="${REPO_ROOT}/.env.api"
+UI_ENV_FILE="${REPO_ROOT}/.env.ui"
+
 typeset -i API_PID=0
 typeset -i UI_PID=0
 
@@ -59,14 +63,54 @@ trap on_interrupt INT TERM
 
 cd "${REPO_ROOT}"
 
+load_env_files() {
+  local env_file
+
+  set -a
+  for env_file in "$@"; do
+    if [[ -f "${env_file}" ]]; then
+      source "${env_file}"
+    fi
+  done
+  set +a
+}
+
+describe_env_files() {
+  local label="$1"
+  shift
+
+  local env_file
+  local found_any=0
+
+  echo "${label} environment files:"
+  for env_file in "$@"; do
+    if [[ -f "${env_file}" ]]; then
+      echo "  - ${env_file:t}"
+      found_any=1
+    fi
+  done
+
+  if (( found_any == 0 )); then
+    echo "  - none found (expects environment variables to already be exported)"
+  fi
+}
+
 echo "Using Python: ${PYTHON_BIN}"
+describe_env_files "API" "${COMMON_ENV_FILE}" "${API_ENV_FILE}"
 echo "Starting API on http://${API_HOST}:${API_PORT}"
-PYTHONPATH="${REPO_ROOT}/src" \
-  "${PYTHON_BIN}" -m uvicorn agent_86.main:app --reload --host "${API_HOST}" --port "${API_PORT}" &
+(
+  load_env_files "${COMMON_ENV_FILE}" "${API_ENV_FILE}"
+  export PYTHONPATH="${REPO_ROOT}/src"
+  exec "${PYTHON_BIN}" -m uvicorn agent_86.main:app --reload --host "${API_HOST}" --port "${API_PORT}"
+) &
 API_PID=$!
 
+describe_env_files "UI" "${COMMON_ENV_FILE}" "${UI_ENV_FILE}"
 echo "Starting UI on http://${API_HOST}:${UI_PORT}"
-"${PYTHON_BIN}" -m streamlit run "${REPO_ROOT}/dev_ui.py" --server.address "${API_HOST}" --server.port "${UI_PORT}" &
+(
+  load_env_files "${COMMON_ENV_FILE}" "${UI_ENV_FILE}"
+  exec "${PYTHON_BIN}" -m streamlit run "${REPO_ROOT}/dev_ui.py" --server.address "${API_HOST}" --server.port "${UI_PORT}"
+) &
 UI_PID=$!
 
 echo ""

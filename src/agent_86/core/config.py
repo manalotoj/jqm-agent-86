@@ -32,11 +32,7 @@ class Settings(BaseSettings):
     entra_api_client_id: str = Field(min_length=1)
     entra_api_audience: str = Field(min_length=1)
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(extra="ignore")
 
     @property
     def entra_authority(self) -> str:
