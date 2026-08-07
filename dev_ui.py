@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 import streamlit as st
@@ -16,10 +18,47 @@ MODEL_OPTIONS = [
 ]
 TOKEN_REFRESH_WINDOW_SECONDS = 300
 AUTH_FLOW_SESSION_KEY = "entra_auth_flow"
+AUTH_SESSION_ID_SESSION_KEY = "entra_auth_session_id"
 MSAL_CLIENT_SESSION_KEY = "entra_msal_client"
 MSAL_CACHE_SESSION_KEY = "entra_msal_cache"
 MSAL_ACCOUNT_SESSION_KEY = "entra_msal_account"
 API_SESSION_KEY = "agent_86_api_session"
+AUTH_SESSION_QUERY_PARAM = "auth_session"
+PENDING_AUTH_FLOW_TTL_SECONDS = 600
+PERSISTED_AUTH_SESSION_TTL_SECONDS = 43200
+
+
+@dataclass
+class PendingAuthFlow:
+    flow: dict[str, Any]
+    settings_key: tuple[str, str, str]
+    created_at: float
+
+
+@dataclass
+class PersistedAuthSession:
+    account: Mapping[str, Any]
+    token_cache: str
+    settings_key: tuple[str, str, str]
+    created_at: float
+
+
+# These MUST be st.cache_resource-backed rather than plain module-level
+# dicts. Streamlit re-executes this entire file top-to-bottom on every
+# rerun (every browser connection, every st.rerun(), every widget
+# interaction) -- a bare `= {}` assignment would silently wipe these on
+# the very next run, which is exactly what was breaking the OAuth
+# callback handoff. st.cache_resource caches the *return value* once and
+# hands back the same object on every subsequent call, across reruns and
+# across sessions, for the lifetime of the process.
+@st.cache_resource
+def _pending_auth_flows() -> dict[str, PendingAuthFlow]:
+    return {}
+
+
+@st.cache_resource
+def _persisted_auth_sessions() -> dict[str, PersistedAuthSession]:
+    return {}
 
 
 @dataclass(frozen=True)
@@ -36,12 +75,23 @@ class UiAuthSettings:
         return f"https://login.microsoftonline.com/{self.tenant_id}"
 
     @property
+    def app_base_url(self) -> str:
+        # redirect_uri is expected to point at a path Streamlit actually
+        # serves -- in practice this means the app root ("/"). Streamlit
+        # only routes requests it knows about (root, its own static/
+        # websocket routes, and registered multipage-app page slugs);
+        # anything else 404s before your script ever runs. Do not point
+        # this at a made-up path like /oauth2callback or /auth/callback.
+        parsed = urlsplit(self.redirect_uri)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
+
+    @property
     def api_scope(self) -> str:
         return f"{self.api_audience}/access_as_user"
 
     @property
     def login_scopes(self) -> list[str]:
-        return ["openid", "profile", "offline_access", self.api_scope]
+        return [self.api_scope]
 
 
 def load_ui_settings(env: Mapping[str, str] | None = None) -> UiAuthSettings:
@@ -99,7 +149,97 @@ def _expires_soon(
         return False
 
 
-def _get_token_cache() -> SerializableTokenCache:
+def _settings_key(settings: UiAuthSettings) -> tuple[str, str, str]:
+    return (settings.authority, settings.ui_client_id, settings.redirect_uri)
+
+
+def _prune_expired_auth_state(now: Callable[[], float] = time.time) -> None:
+    current_time = now()
+
+    pending_flows = _pending_auth_flows()
+    for state, pending in list(pending_flows.items()):
+        if current_time - pending.created_at > PENDING_AUTH_FLOW_TTL_SECONDS:
+            del pending_flows[state]
+
+    persisted_sessions = _persisted_auth_sessions()
+    for session_id, persisted in list(persisted_sessions.items()):
+        if current_time - persisted.created_at > PERSISTED_AUTH_SESSION_TTL_SECONDS:
+            del persisted_sessions[session_id]
+
+
+def _current_query_params() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in st.query_params.to_dict().items()
+        if value is not None
+    }
+
+
+def _set_query_params(params: Mapping[str, str]) -> None:
+    st.query_params.clear()
+    for key, value in params.items():
+        st.query_params[key] = value
+
+
+def _auth_session_id_from_query_params() -> str | None:
+    value = _current_query_params().get(AUTH_SESSION_QUERY_PARAM)
+    if value:
+        return str(value)
+    return None
+
+
+def _clear_auth_query_params(*, preserve_auth_session: bool = False) -> None:
+    params = _current_query_params()
+    for key in ["code", "state", "session_state", "error", "error_description"]:
+        params.pop(key, None)
+
+    if not preserve_auth_session:
+        params.pop(AUTH_SESSION_QUERY_PARAM, None)
+
+    _set_query_params(params)
+
+
+def _build_url_with_query(base_url: str, params: Mapping[str, str]) -> str:
+    parsed = urlsplit(base_url)
+    merged_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    merged_params.update(params)
+    query = urlencode(merged_params)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", query, parsed.fragment))
+
+
+def _build_post_auth_redirect_url(settings: UiAuthSettings, auth_session_id: str) -> str:
+    return _build_url_with_query(
+        settings.app_base_url,
+        {AUTH_SESSION_QUERY_PARAM: auth_session_id},
+    )
+
+
+def _restore_persisted_auth_session(settings: UiAuthSettings) -> None:
+    _prune_expired_auth_state()
+
+    auth_session_id = _auth_session_id_from_query_params()
+    if not auth_session_id:
+        return
+
+    persisted = _persisted_auth_sessions().get(auth_session_id)
+    if persisted is None or persisted.settings_key != _settings_key(settings):
+        return
+
+    cache = st.session_state.get(MSAL_CACHE_SESSION_KEY)
+    if cache is None:
+        cache = SerializableTokenCache()
+        if persisted.token_cache:
+            cache.deserialize(persisted.token_cache)
+        st.session_state[MSAL_CACHE_SESSION_KEY] = cache
+
+    if not st.session_state.get(MSAL_ACCOUNT_SESSION_KEY):
+        st.session_state[MSAL_ACCOUNT_SESSION_KEY] = dict(persisted.account)
+
+    st.session_state[AUTH_SESSION_ID_SESSION_KEY] = auth_session_id
+
+
+def _get_token_cache(settings: UiAuthSettings) -> SerializableTokenCache:
+    _restore_persisted_auth_session(settings)
     cache = st.session_state.get(MSAL_CACHE_SESSION_KEY)
     if cache is None:
         cache = SerializableTokenCache()
@@ -107,17 +247,43 @@ def _get_token_cache() -> SerializableTokenCache:
     return cache
 
 
+def _persist_auth_session(
+    settings: UiAuthSettings,
+    account: Mapping[str, Any],
+    *,
+    auth_session_id: str | None = None,
+) -> str:
+    _prune_expired_auth_state()
+
+    session_id = (
+        auth_session_id
+        or st.session_state.get(AUTH_SESSION_ID_SESSION_KEY)
+        or _auth_session_id_from_query_params()
+        or uuid.uuid4().hex
+    )
+
+    _persisted_auth_sessions()[str(session_id)] = PersistedAuthSession(
+        account=dict(account),
+        token_cache=_get_token_cache(settings).serialize(),
+        settings_key=_settings_key(settings),
+        created_at=time.time(),
+    )
+    st.session_state[AUTH_SESSION_ID_SESSION_KEY] = str(session_id)
+    return str(session_id)
+
+
 def get_msal_client(settings: UiAuthSettings) -> ConfidentialClientApplication:
+    _restore_persisted_auth_session(settings)
     client = st.session_state.get(MSAL_CLIENT_SESSION_KEY)
     client_key = st.session_state.get(f"{MSAL_CLIENT_SESSION_KEY}_key")
-    expected_key = (settings.authority, settings.ui_client_id, settings.redirect_uri)
+    expected_key = _settings_key(settings)
 
     if client is None or client_key != expected_key:
         client = ConfidentialClientApplication(
             client_id=settings.ui_client_id,
             client_credential=settings.ui_client_secret,
             authority=settings.authority,
-            token_cache=_get_token_cache(),
+            token_cache=_get_token_cache(settings),
         )
         st.session_state[MSAL_CLIENT_SESSION_KEY] = client
         st.session_state[f"{MSAL_CLIENT_SESSION_KEY}_key"] = expected_key
@@ -139,31 +305,40 @@ def _get_account(client: ConfidentialClientApplication) -> Mapping[str, Any] | N
     return None
 
 
-def _clear_auth_query_params() -> None:
-    st.query_params.clear()
-
-
 def begin_login(settings: UiAuthSettings, client: ConfidentialClientApplication) -> str:
+    _prune_expired_auth_state()
     flow = client.initiate_auth_code_flow(
         scopes=settings.login_scopes,
         redirect_uri=settings.redirect_uri,
         response_mode="query",
     )
     st.session_state[AUTH_FLOW_SESSION_KEY] = flow
+    state = flow.get("state")
+    if state:
+        _pending_auth_flows()[str(state)] = PendingAuthFlow(
+            flow=flow,
+            settings_key=_settings_key(settings),
+            created_at=time.time(),
+        )
     return flow["auth_uri"]
 
 
-def complete_login_if_callback(client: ConfidentialClientApplication) -> bool:
-    auth_response = {
-        key: value
-        for key, value in st.query_params.to_dict().items()
-        if value is not None
-    }
+def complete_login_if_callback(
+    settings: UiAuthSettings,
+    client: ConfidentialClientApplication,
+) -> str | None:
+    auth_response = _current_query_params()
 
     if not ({"code", "error", "state"} & set(auth_response)):
-        return False
+        return None
 
     flow = st.session_state.get(AUTH_FLOW_SESSION_KEY)
+    state = auth_response.get("state")
+    if flow is None and state:
+        pending_flow = _pending_auth_flows().get(str(state))
+        if pending_flow and pending_flow.settings_key == _settings_key(settings):
+            flow = pending_flow.flow
+
     if not flow:
         _clear_auth_query_params()
         raise RuntimeError("Authentication callback received without a matching sign-in session.")
@@ -175,10 +350,11 @@ def complete_login_if_callback(client: ConfidentialClientApplication) -> bool:
         raise RuntimeError("Authentication callback validation failed.") from exc
     finally:
         st.session_state.pop(AUTH_FLOW_SESSION_KEY, None)
-
-    _clear_auth_query_params()
+        if state:
+            _pending_auth_flows().pop(str(state), None)
 
     if "error" in result:
+        _clear_auth_query_params()
         description = result.get("error_description") or result["error"]
         raise RuntimeError(f"Microsoft Entra sign-in failed: {description}")
 
@@ -186,10 +362,17 @@ def complete_login_if_callback(client: ConfidentialClientApplication) -> bool:
     preferred_username = claims.get("preferred_username") if isinstance(claims, Mapping) else None
     accounts = client.get_accounts(username=preferred_username) if preferred_username else client.get_accounts()
     if not accounts:
+        _clear_auth_query_params()
         raise RuntimeError("Microsoft Entra sign-in succeeded, but no cached account was found.")
 
     st.session_state[MSAL_ACCOUNT_SESSION_KEY] = accounts[0]
-    return True
+    auth_session_id = _persist_auth_session(
+        settings,
+        accounts[0],
+        auth_session_id=uuid.uuid4().hex,
+    )
+    _clear_auth_query_params(preserve_auth_session=False)
+    return _build_post_auth_redirect_url(settings, auth_session_id)
 
 
 def get_access_token(
@@ -223,6 +406,8 @@ def get_access_token(
         )
         if refreshed and "access_token" in refreshed and "error" not in refreshed:
             result = refreshed
+
+    _persist_auth_session(settings, account)
 
     return result.get("access_token")
 
@@ -411,9 +596,14 @@ def render_message_content(message: dict[str, Any]) -> None:
 
 def _render_sign_in_redirect(auth_uri: str) -> None:
     st.info("Redirecting to Microsoft Entra ID for sign-in…")
-    st.markdown(
-        f'<meta http-equiv="refresh" content="0; url={auth_uri}">',
-        unsafe_allow_html=True,
+    escaped_auth_uri = json.dumps(auth_uri)
+    st.html(
+        f"""
+        <script>
+            window.location.replace({escaped_auth_uri});
+        </script>
+        """,
+        unsafe_allow_javascript=True,
     )
     st.link_button("Continue to Microsoft Entra ID", auth_uri, use_container_width=True)
 
@@ -421,8 +611,10 @@ def _render_sign_in_redirect(auth_uri: str) -> None:
 def _ensure_authenticated(settings: UiAuthSettings) -> None:
     client = get_msal_client(settings)
 
-    if complete_login_if_callback(client):
-        st.rerun()
+    post_auth_redirect_url = complete_login_if_callback(settings, client)
+    if post_auth_redirect_url:
+        _render_sign_in_redirect(post_auth_redirect_url)
+        st.stop()
 
     if get_access_token(settings, client):
         return
@@ -442,8 +634,13 @@ def _authenticated_username() -> str | None:
 
 
 def logout() -> None:
+    auth_session_id = st.session_state.get(AUTH_SESSION_ID_SESSION_KEY) or _auth_session_id_from_query_params()
+    if auth_session_id:
+        _persisted_auth_sessions().pop(str(auth_session_id), None)
+
     for key in [
         AUTH_FLOW_SESSION_KEY,
+        AUTH_SESSION_ID_SESSION_KEY,
         MSAL_CLIENT_SESSION_KEY,
         f"{MSAL_CLIENT_SESSION_KEY}_key",
         MSAL_CACHE_SESSION_KEY,

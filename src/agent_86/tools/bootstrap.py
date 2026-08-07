@@ -13,10 +13,11 @@ def build_default_tool_registry(
     *,
     web_search_service: WebSearchService | None = None,
 ) -> ToolRegistry:
+    from agent_86.core.config import get_settings
     from agent_86.services.web_search_service import WebSearchService
     from agent_86.tools.web_search_tool import WebSearchTool
 
-    resolved_web_search_service = web_search_service or WebSearchService()
+    resolved_web_search_service = web_search_service or WebSearchService(get_settings())
 
     return ToolRegistry(
         tools=[

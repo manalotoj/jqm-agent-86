@@ -17,6 +17,7 @@ class OpenIdMetadataFetcher:
         self._jwks: dict[str, Any] | None = None
 
     async def get_metadata(self) -> dict[str, Any]:
+        print(f"Fetching OpenID configuration from {self._config_url}")
         if self._metadata is None:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -31,18 +32,24 @@ class OpenIdMetadataFetcher:
         return self._metadata
 
     async def get_jwks(self) -> dict[str, Any]:
+        print("Fetching JWKS from OpenID configuration")
         if self._jwks is None:
+            print("JWKS not cached, fetching metadata first")
             metadata = await self.get_metadata()
             jwks_uri = metadata.get("jwks_uri")
+            print(f"JWKS URI from metadata: {jwks_uri}")
             if not jwks_uri:
+                print("jwks_uri not found in metadata")
                 raise TokenValidationError("OIDC metadata is missing jwks_uri")
 
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
+                    print(f"Fetching JWKS from {jwks_uri}")
                     response = await client.get(jwks_uri)
                     response.raise_for_status()
                     self._jwks = response.json()
             except (httpx.HTTPError, ValueError) as exc:
+                print(f"Failed to fetch JWKS: {exc}")
                 raise TokenValidationError("Failed to load token signing keys") from exc
 
         return self._jwks
@@ -57,20 +64,23 @@ class EntraJwtTokenValidator:
 
     async def validate_token(self, token: str) -> Mapping[str, Any]:
         if not token:
+            print("No token provided for validation")
             raise TokenValidationError("Missing access token")
 
         try:
             header = jwt.get_unverified_header(token)
         except InvalidTokenError as exc:
+            print(f"Invalid token header: {exc}")
             raise TokenValidationError("Token header is invalid") from exc
 
         key_id = header.get("kid")
         if not key_id:
+            print("Token header is missing 'kid'")
             raise TokenValidationError("Token header is missing kid")
 
         jwks = await self._metadata_fetcher.get_jwks()
         key = self._find_signing_key(jwks, key_id)
-
+        print(f"audience={self._settings.entra_api_audience}, issuer={self._settings.entra_issuer}")
         try:
             claims = jwt.decode(
                 token,
@@ -81,6 +91,7 @@ class EntraJwtTokenValidator:
                 options={"require": ["exp", "iat", "iss", "aud"]},
             )
         except InvalidTokenError as exc:
+            print(f"Token validation failed: {exc}")
             raise TokenValidationError("Token validation failed") from exc
 
         return claims
@@ -88,6 +99,7 @@ class EntraJwtTokenValidator:
     def _find_signing_key(self, jwks: dict[str, Any], key_id: str) -> Any:
         for jwk in jwks.get("keys", []):
             if jwk.get("kid") == key_id:
+                print(f"Found signing key for kid: {key_id}")
                 return RSAAlgorithm.from_jwk(jwk)
 
         raise TokenValidationError("Signing key not found for token")

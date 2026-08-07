@@ -48,7 +48,7 @@ scripts/          helper scripts, including local Cosmos DB setup
 At a high level, the application works like this:
 
 1. The Streamlit UI redirects an unauthenticated user to Microsoft Entra ID.
-2. Microsoft Entra ID returns an authorization code to the configured Streamlit callback URI.
+2. Microsoft Entra ID returns an authorization code to the configured Streamlit redirect URI.
 3. The UI exchanges the code for delegated tokens with MSAL and caches/refreshes them for the current Streamlit session.
 4. The UI calls the FastAPI backend with `Authorization: Bearer <access_token>`.
 5. The API validates the bearer token against Microsoft identity platform metadata and signing keys.
@@ -116,8 +116,10 @@ Purpose: interactive user sign-in.
 - Redirect URI (local development):
 
   ```text
-  http://localhost:8501/oauth2callback
+  http://localhost:8501/
   ```
+
+  > Do **not** use `http://localhost:8501/oauth2callback` for this custom MSAL flow. Streamlit reserves `/oauth2callback` for its built-in `st.login()`/OIDC handler, so Entra callbacks to that path never reach `dev_ui.py`.
 
 - Client secret: required
 - Delegated API permission to the backend API scope:
@@ -218,7 +220,7 @@ UI-only settings:
 ```env
 ENTRA_UI_CLIENT_ID=your-streamlit-ui-app-client-id
 ENTRA_UI_CLIENT_SECRET=your-streamlit-ui-client-secret
-ENTRA_REDIRECT_URI=http://localhost:8501/oauth2callback
+ENTRA_REDIRECT_URI=http://localhost:8501/
 API_BASE_URL=http://127.0.0.1:8000
 ```
 

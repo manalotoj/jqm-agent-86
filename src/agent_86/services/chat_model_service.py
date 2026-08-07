@@ -106,6 +106,7 @@ class ChatModelService:
             tool_context = ToolContext(session_id="unknown", user_id="unknown", metadata={})
 
         tools_schema = self._build_tools_schema(available_tool_names)
+        tool_choice = "required" if tools_schema else None
         conversation_items = [self._message_to_responses_item(message) for message in messages]
         transcript_events: list[GeneratedTranscriptMessage] = []
         streamed_text_parts: list[str] = []
@@ -117,6 +118,7 @@ class ChatModelService:
                         items=conversation_items,
                         model=model,
                         tools_schema=tools_schema,
+                        tool_choice=tool_choice,
                         event_callback=event_callback,
                     )
                     if streamed_text:
@@ -127,6 +129,7 @@ class ChatModelService:
                         model=model,
                         input=conversation_items,
                         tools=tools_schema,
+                        tool_choice=tool_choice,
                         stream=False,
                     )
                     output_text = response.output_text if hasattr(response, "output_text") else ""
@@ -329,12 +332,14 @@ class ChatModelService:
         items: list[dict[str, Any]],
         model: str,
         tools_schema: list[dict[str, Any]],
+        tool_choice: str | None,
         event_callback: Optional[ChatStreamEventCallback],
     ) -> tuple[Any, str]:
         stream = await self._client.responses.create(
             model=model,
             input=items,
             tools=tools_schema,
+            tool_choice=tool_choice,
             stream=True,
         )
 

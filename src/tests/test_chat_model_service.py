@@ -103,6 +103,10 @@ async def test_generate_reply_persists_only_tool_transcript_messages_before_fina
     )
 
     assert mock_create.await_count == 2
+    first_call_kwargs = mock_create.await_args_list[0].kwargs
+    second_call_kwargs = mock_create.await_args_list[1].kwargs
+    assert first_call_kwargs["tool_choice"] == "required"
+    assert second_call_kwargs["tool_choice"] == "required"
     assert reply.assistant_text == "Here is the latest AI news summary."
     assert len(reply.transcript_messages) == 2
 
@@ -224,6 +228,10 @@ async def test_generate_reply_stream_emits_tool_events_and_persists_transcript_m
     )
 
     assert mock_create.await_count == 2
+    first_call_kwargs = mock_create.await_args_list[0].kwargs
+    second_call_kwargs = mock_create.await_args_list[1].kwargs
+    assert first_call_kwargs["tool_choice"] == "required"
+    assert second_call_kwargs["tool_choice"] == "required"
     assert reply.assistant_text == "Here is the streamed summary."
     assert len(reply.transcript_messages) == 2
     assert [(event.event, event.data) for event in events] == [

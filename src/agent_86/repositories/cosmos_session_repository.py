@@ -98,11 +98,7 @@ class CosmosSessionRepository:
         session.title = request.title
         session.updated_at = datetime.now(UTC)
 
-        updated = await self._container.replace_item(
-            item=session.id,
-            body=self._to_document(session),
-            partition_key=session.user_id,
-        )
+        updated = await self._container.upsert_item(self._to_document(session))
 
         return self._from_document(updated)
 
