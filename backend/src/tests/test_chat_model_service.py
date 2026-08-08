@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.services.chat_model_service import ChatModelService
-from backend.src.agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.domain.models.message import Message
+from agent_86.services.chat_model_service import ChatModelService
+from agent_86.tools.tool import ToolContext, ToolResult
 
 
 class FakeAsyncStream:

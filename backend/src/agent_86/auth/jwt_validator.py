@@ -6,8 +6,8 @@ import jwt
 from jwt import InvalidTokenError
 from jwt.algorithms import RSAAlgorithm
 
-from backend.src.agent_86.auth.provider import TokenValidationError
-from backend.src.agent_86.core.config import Settings
+from agent_86.auth.provider import TokenValidationError
+from agent_86.core.config import Settings
 
 
 class OpenIdMetadataFetcher:

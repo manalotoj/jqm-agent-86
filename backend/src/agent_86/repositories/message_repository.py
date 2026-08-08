@@ -1,7 +1,7 @@
 from typing import Protocol
 
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.domain.schemas.message import CreateMessageRequest
+from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.message import CreateMessageRequest
 
 
 class MessageRepository(Protocol):

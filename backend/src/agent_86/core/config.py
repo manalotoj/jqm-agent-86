@@ -3,7 +3,7 @@ from functools import lru_cache
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from backend.src.agent_86.core.errors import ConfigurationError
+from agent_86.core.errors import ConfigurationError
 
 
 class Settings(BaseSettings):

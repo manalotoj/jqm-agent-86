@@ -3,8 +3,8 @@ from uuid import uuid4
 
 from azure.cosmos import ContainerProxy
 
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.domain.schemas.message import CreateMessageRequest
+from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.message import CreateMessageRequest
 
 
 class CosmosMessageRepository:

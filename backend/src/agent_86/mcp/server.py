@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from backend.src.agent_86.mcp.adapter import Agent86McpAdapter
-from backend.src.agent_86.services.tool_service import ToolService
-from backend.src.agent_86.tools.bootstrap import build_default_tool_registry
+from agent_86.mcp.adapter import Agent86McpAdapter
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.bootstrap import build_default_tool_registry
 
 SERVER_NAME = "agent-86"
 SERVER_VERSION = "0.1.0"

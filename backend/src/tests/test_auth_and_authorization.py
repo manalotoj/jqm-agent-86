@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("COSMOS_ENDPOINT", "https://example.documents.azure.com:443/")
 os.environ.setdefault("COSMOS_KEY", "test-cosmos-key")
+os.environ.setdefault("COSMOS_DATABASE_NAME", "agent86-test")
 os.environ.setdefault("FOUNDRY_OPENAI_BASE_URL", "https://example.openai.azure.com/")
 os.environ.setdefault("FOUNDRY_OPENAI_API_KEY", "test-openai-key")
 os.environ.setdefault("FOUNDRY_DEFAULT_CHAT_MODEL", "gpt-4.1-mini")
@@ -19,25 +20,25 @@ os.environ.setdefault(
     "api://00000000-0000-0000-0000-000000000002",
 )
 
-from backend.src.agent_86.api.dependencies import (
+from agent_86.api.dependencies import (
     get_chat_model_service,
     get_message_service,
     get_model_router,
     get_session_service,
     get_tool_service,
 )
-from backend.src.agent_86.auth.dependencies import get_token_validator
-from backend.src.agent_86.auth.provider import TokenValidationError
-from backend.src.agent_86.core.config import get_settings
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.domain.schemas.message import CreateMessageRequest
-from backend.src.agent_86.domain.schemas.session import CreateSessionRequest
-from backend.src.agent_86.main import create_app
-from backend.src.agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
-from backend.src.agent_86.services.chat_model_service import ChatModelReply
-from backend.src.agent_86.services.message_service import MessageService
-from backend.src.agent_86.services.session_service import SessionService
-from backend.src.agent_86.tools.tool import ToolContext
+from agent_86.auth.dependencies import get_token_validator
+from agent_86.auth.provider import TokenValidationError
+from agent_86.core.config import get_settings
+from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.message import CreateMessageRequest
+from agent_86.domain.schemas.session import CreateSessionRequest
+from agent_86.main import create_app
+from agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
+from agent_86.services.chat_model_service import ChatModelReply
+from agent_86.services.message_service import MessageService
+from agent_86.services.session_service import SessionService
+from agent_86.tools.tool import ToolContext
 
 
 def clear_settings_caches() -> None:
@@ -106,6 +107,7 @@ def configured_environment(monkeypatch: pytest.MonkeyPatch):
     values = {
         "COSMOS_ENDPOINT": "https://example.documents.azure.com:443/",
         "COSMOS_KEY": "test-cosmos-key",
+        "COSMOS_DATABASE_NAME": "agent86-test",
         "FOUNDRY_OPENAI_BASE_URL": "https://example.openai.azure.com/",
         "FOUNDRY_OPENAI_API_KEY": "test-openai-key",
         "FOUNDRY_DEFAULT_CHAT_MODEL": "gpt-4.1-mini",

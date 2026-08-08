@@ -4,10 +4,10 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, status
 
-from backend.src.agent_86.auth.jwt_validator import EntraJwtTokenValidator
-from backend.src.agent_86.auth.models import AuthenticatedUser
-from backend.src.agent_86.auth.provider import TokenValidationError, TokenValidator
-from backend.src.agent_86.core.config import get_settings
+from agent_86.auth.jwt_validator import EntraJwtTokenValidator
+from agent_86.auth.models import AuthenticatedUser
+from agent_86.auth.provider import TokenValidationError, TokenValidator
+from agent_86.core.config import get_settings
 
 
 def _extract_bearer_token(authorization: str | None) -> str:

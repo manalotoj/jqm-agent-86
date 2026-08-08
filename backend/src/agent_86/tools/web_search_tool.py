@@ -1,5 +1,5 @@
-from backend.src.agent_86.services.web_search_service import WebSearchService
-from backend.src.agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.services.web_search_service import WebSearchService
+from agent_86.tools.tool import ToolContext, ToolResult
 
 
 class WebSearchTool:

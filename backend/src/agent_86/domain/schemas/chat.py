@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from backend.src.agent_86.domain.schemas.message import MessageResponse
+from agent_86.domain.schemas.message import MessageResponse
 
 
 class ChatRequest(BaseModel):

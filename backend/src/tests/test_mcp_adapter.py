@@ -10,11 +10,11 @@ os.environ.setdefault("FOUNDRY_OPENAI_BASE_URL", "https://example.openai.azure.c
 os.environ.setdefault("FOUNDRY_DEFAULT_CHAT_MODEL", "gpt-4.1-mini")
 os.environ.setdefault("FOUNDRY_PREMIUM_CHAT_MODEL", "gpt-5.4")
 
-from backend.src.agent_86.mcp.adapter import Agent86McpAdapter
-from backend.src.agent_86.services.tool_service import ToolService
-from backend.src.agent_86.tools.tool import ToolContext, ToolResult
-from backend.src.agent_86.tools.tool_registry import ToolRegistry
-from backend.src.agent_86.tools.web_search_tool import WebSearchTool
+from agent_86.mcp.adapter import Agent86McpAdapter
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.tools.tool_registry import ToolRegistry
+from agent_86.tools.web_search_tool import WebSearchTool
 
 
 class RecordingWebSearchService:
@@ -153,6 +153,6 @@ async def test_call_tool_returns_mcp_error_shape_for_missing_query_argument():
 
 
 def test_server_module_import_does_not_require_optional_mcp_dependency():
-    import backend.src.agent_86.mcp.server as server_module
+    import agent_86.mcp.server as server_module
 
     assert callable(server_module.main)

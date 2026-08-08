@@ -1,6 +1,6 @@
 import httpx
 
-from backend.src.agent_86.core.config import Settings
+from agent_86.core.config import Settings
 
 
 class WebSearchService:

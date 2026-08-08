@@ -1,0 +1,9 @@
+-r requirements.txt
+
+# No additional e2e-only Python dependencies are required right now.
+# The e2e harness uses packages that are already present in backend/requirements.txt:
+# - httpx
+# - msal
+# - pydantic-settings
+# This file exists to preserve the existing per-concern requirements split and
+# to give future e2e-only dependencies a dedicated home.

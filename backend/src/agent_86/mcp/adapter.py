@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from backend.src.agent_86.services.tool_service import ToolService
-from backend.src.agent_86.tools.tool import ToolContext, ToolResult
-from backend.src.agent_86.tools.tool_registry import ToolRegistry
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.tools.tool_registry import ToolRegistry
 
 MCP_STDIO_SESSION_ID = "mcp-stdio"
 MCP_STDIO_USER_ID = "mcp-client"

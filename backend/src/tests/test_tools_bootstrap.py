@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from backend.src.agent_86.tools.bootstrap import build_default_tool_registry
+from agent_86.tools.bootstrap import build_default_tool_registry
 
 
 def test_build_default_tool_registry_uses_settings_when_service_not_provided(monkeypatch) -> None:

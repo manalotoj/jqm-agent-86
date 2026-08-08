@@ -2,10 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
-REPO_ROOT="${SCRIPT_DIR:h}"
+REPO_ROOT="${SCRIPT_DIR:h:h}"
+BACKEND_ROOT="${REPO_ROOT}/backend"
 
-if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
-  PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+if [[ -x "${BACKEND_ROOT}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${BACKEND_ROOT}/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="$(command -v python3)"
 elif command -v python >/dev/null 2>&1; then
@@ -20,10 +21,10 @@ if ! "${PYTHON_BIN}" -c 'import mcp' >/dev/null 2>&1; then
   exit 1
 fi
 
-COMMON_ENV_FILE="${REPO_ROOT}/.env.common"
-API_ENV_FILE="${REPO_ROOT}/.env.api"
+COMMON_ENV_FILE="${BACKEND_ROOT}/.env.common"
+API_ENV_FILE="${BACKEND_ROOT}/.env.api"
 
-cd "${REPO_ROOT}"
+cd "${BACKEND_ROOT}"
 
 load_env_files() {
   local env_file
@@ -62,4 +63,4 @@ describe_env_files "MCP" "${COMMON_ENV_FILE}" "${API_ENV_FILE}"
 echo "Starting agent-86 MCP stdio server..." >&2
 
 load_env_files "${COMMON_ENV_FILE}" "${API_ENV_FILE}"
-PYTHONPATH="${REPO_ROOT}/src" exec "${PYTHON_BIN}" -m agent_86.mcp.server
+PYTHONPATH="${BACKEND_ROOT}/src" exec "${PYTHON_BIN}" -m agent_86.mcp.server

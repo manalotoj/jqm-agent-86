@@ -9,11 +9,11 @@ from openai.types.responses.easy_input_message_param import EasyInputMessagePara
 from openai.types.responses.response_function_tool_call_param import ResponseFunctionToolCallParam
 from openai.types.responses.response_input_item_param import FunctionCallOutput
 
-from backend.src.agent_86.core.config import Settings
-from backend.src.agent_86.domain.models.message import Message, MessageRole
-from backend.src.agent_86.tools.tool import ToolContext, ToolResult
-from backend.src.agent_86.services.tool_service import ToolService
-from backend.src.agent_86.tools.tool_registry import ToolRegistry
+from agent_86.core.config import Settings
+from agent_86.domain.models.message import Message, MessageRole
+from agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.tool_registry import ToolRegistry
 
 
 @dataclass

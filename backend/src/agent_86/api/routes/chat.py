@@ -5,24 +5,24 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from backend.src.agent_86.auth.dependencies import get_authenticated_user
-from backend.src.agent_86.auth.models import AuthenticatedUser
-from backend.src.agent_86.api.dependencies import (
+from agent_86.auth.dependencies import get_authenticated_user
+from agent_86.auth.models import AuthenticatedUser
+from agent_86.api.dependencies import (
     get_chat_model_service,
     get_message_service,
     get_model_router,
     get_session_service,
     get_tool_service,
 )
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.domain.schemas.chat import ChatRequest, ChatResponse, ChatStreamEvent as ChatStreamEventSchema
-from backend.src.agent_86.domain.schemas.message import CreateMessageRequest, MessageResponse
-from backend.src.agent_86.services.chat_model_service import ChatModelReply, ChatModelService, ChatStreamEvent
-from backend.src.agent_86.services.message_service import MessageService
-from backend.src.agent_86.services.model_router import ModelRouter
-from backend.src.agent_86.services.session_service import SessionService
-from backend.src.agent_86.services.tool_service import ToolService
-from backend.src.agent_86.tools.tool import ToolContext
+from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.chat import ChatRequest, ChatResponse, ChatStreamEvent as ChatStreamEventSchema
+from agent_86.domain.schemas.message import CreateMessageRequest, MessageResponse
+from agent_86.services.chat_model_service import ChatModelReply, ChatModelService, ChatStreamEvent
+from agent_86.services.message_service import MessageService
+from agent_86.services.model_router import ModelRouter
+from agent_86.services.session_service import SessionService
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.tool import ToolContext
 
 router = APIRouter(prefix="/sessions/{session_id}/chat", tags=["chat"])
 

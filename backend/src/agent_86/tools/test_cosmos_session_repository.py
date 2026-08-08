@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +10,7 @@ from agent_86.repositories.cosmos_session_repository import CosmosSessionReposit
 
 @pytest.mark.asyncio
 async def test_update_session_uses_upsert_item_with_updated_document() -> None:
-    container = AsyncMock()
+    container = SimpleNamespace()
     repository = CosmosSessionRepository(container)
 
     existing_document = {
@@ -29,8 +30,8 @@ async def test_update_session_uses_upsert_item_with_updated_document() -> None:
     async def query_items(*args, **kwargs):
         yield existing_document
 
-    container.query_items.side_effect = query_items
-    container.upsert_item.return_value = updated_document
+    container.query_items = query_items
+    container.upsert_item = AsyncMock(return_value=updated_document)
 
     session = await repository.update_session(
         user_id="user-1",

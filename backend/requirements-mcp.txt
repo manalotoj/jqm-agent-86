@@ -1,1 +1,2 @@
-mcp>=2,<3
+# MCP server code currently uses the v1 Python SDK API surface.
+mcp>=1.28,<2

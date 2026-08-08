@@ -219,3 +219,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+backend/.env.e2e
+backend/.env.e2e.client

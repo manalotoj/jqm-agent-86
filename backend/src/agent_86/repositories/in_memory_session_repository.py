@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from backend.src.agent_86.domain.models.session import Session
-from backend.src.agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
+from agent_86.domain.models.session import Session
+from agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
 
 
 class InMemorySessionRepository:

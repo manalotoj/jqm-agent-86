@@ -1,6 +1,6 @@
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.domain.schemas.message import CreateMessageRequest
-from backend.src.agent_86.repositories.message_repository import MessageRepository
+from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.message import CreateMessageRequest
+from agent_86.repositories.message_repository import MessageRepository
 
 
 class MessageService:

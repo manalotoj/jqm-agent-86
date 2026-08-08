@@ -1,6 +1,6 @@
-from backend.src.agent_86.domain.models.session import Session
-from backend.src.agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
-from backend.src.agent_86.repositories.session_repository import SessionRepository
+from agent_86.domain.models.session import Session
+from agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
+from agent_86.repositories.session_repository import SessionRepository
 
 
 class SessionService:

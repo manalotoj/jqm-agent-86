@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from backend.src.agent_86.core.config import get_settings
+from agent_86.core.config import get_settings
 
 router = APIRouter()
 

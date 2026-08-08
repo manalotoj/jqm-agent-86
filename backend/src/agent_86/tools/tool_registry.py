@@ -1,4 +1,4 @@
-from backend.src.agent_86.tools.tool import Tool
+from agent_86.tools.tool import Tool
 
 
 class ToolRegistry:

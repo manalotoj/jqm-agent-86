@@ -1,8 +1,7 @@
 fastapi
 uvicorn[standard]
 pydantic
-pydantic-settings
-streamlit
+pydantic_settings
 requests
 msal
 openai
@@ -13,3 +12,4 @@ PyJWT
 cryptography
 pytest
 pytest-asyncio
+aiohttp

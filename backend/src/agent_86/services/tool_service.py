@@ -1,5 +1,5 @@
-from backend.src.agent_86.tools.tool import ToolContext, ToolResult
-from backend.src.agent_86.tools.tool_registry import ToolRegistry
+from agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.tools.tool_registry import ToolRegistry
 
 
 class ToolService:

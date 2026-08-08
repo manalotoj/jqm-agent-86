@@ -2,16 +2,16 @@ from functools import lru_cache
 
 from azure.cosmos.aio import CosmosClient
 
-from backend.src.agent_86.core.config import Settings, get_settings
-from backend.src.agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
-from backend.src.agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
-from backend.src.agent_86.services.chat_model_service import ChatModelService
-from backend.src.agent_86.services.message_service import MessageService
-from backend.src.agent_86.services.model_router import ModelRouter
-from backend.src.agent_86.services.session_service import SessionService
-from backend.src.agent_86.services.web_search_service import WebSearchService
-from backend.src.agent_86.services.tool_service import ToolService
-from backend.src.agent_86.tools.bootstrap import build_default_tool_service
+from agent_86.core.config import Settings, get_settings
+from agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
+from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
+from agent_86.services.chat_model_service import ChatModelService
+from agent_86.services.message_service import MessageService
+from agent_86.services.model_router import ModelRouter
+from agent_86.services.session_service import SessionService
+from agent_86.services.web_search_service import WebSearchService
+from agent_86.services.tool_service import ToolService
+from agent_86.tools.bootstrap import build_default_tool_service
 
 
 @lru_cache(maxsize=1)

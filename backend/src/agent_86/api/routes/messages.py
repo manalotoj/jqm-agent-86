@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from backend.src.agent_86.auth.dependencies import get_authenticated_user
-from backend.src.agent_86.auth.models import AuthenticatedUser
-from backend.src.agent_86.api.dependencies import get_message_service, get_session_service
-from backend.src.agent_86.domain.models.message import Message
-from backend.src.agent_86.domain.schemas.message import CreateMessageRequest, MessageResponse
-from backend.src.agent_86.services.message_service import MessageService
-from backend.src.agent_86.services.session_service import SessionService
+from agent_86.auth.dependencies import get_authenticated_user
+from agent_86.auth.models import AuthenticatedUser
+from agent_86.api.dependencies import get_message_service, get_session_service
+from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.message import CreateMessageRequest, MessageResponse
+from agent_86.services.message_service import MessageService
+from agent_86.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
 

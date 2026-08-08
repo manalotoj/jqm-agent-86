@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 from azure.cosmos import ContainerProxy
 
-from backend.src.agent_86.domain.models.session import Session
-from backend.src.agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
+from agent_86.domain.models.session import Session
+from agent_86.domain.schemas.session import CreateSessionRequest, UpdateSessionRequest
 
 
 class CosmosSessionRepository:
