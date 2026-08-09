@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from unittest.mock import ANY
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -25,6 +27,7 @@ os.environ.setdefault(
 
 from agent_86.api.dependencies import (
     get_artifact_service,
+    get_artifact_prompt_context_service,
     get_chat_model_service,
     get_message_service,
     get_model_router,
@@ -46,6 +49,7 @@ from agent_86.domain.schemas.session_summary import ActionItem, ArtifactRef, Cha
 from agent_86.main import create_app
 from agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
 from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.artifact_prompt_context_service import ArtifactPromptContextService
 from agent_86.services.blob_storage_service import BlobDownload
 from agent_86.services.chat_model_service import ChatModelReply
 from agent_86.services.message_service import MessageService
@@ -267,6 +271,7 @@ def api_client():
         InMemoryArtifactRepository(),
         InMemoryBlobStorageService(),
     )
+    artifact_prompt_context_service = ArtifactPromptContextService(artifact_service)
     chat_model_service = SimpleNamespace(
         generate_reply=AsyncMock(
             return_value=ChatModelReply(
@@ -284,6 +289,7 @@ def api_client():
         session_service,
         message_service,
         artifact_service,
+        artifact_prompt_context_service,
         chat_model_service,
     )
     token_validator = StubTokenValidator(
@@ -299,6 +305,7 @@ def api_client():
     app.dependency_overrides[get_session_service] = lambda: session_service
     app.dependency_overrides[get_message_service] = lambda: message_service
     app.dependency_overrides[get_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[get_artifact_prompt_context_service] = lambda: artifact_prompt_context_service
     app.dependency_overrides[get_chat_model_service] = lambda: chat_model_service
     app.dependency_overrides[get_model_router] = lambda: model_router
     app.dependency_overrides[get_session_summary_service] = lambda: session_summary_service
@@ -661,20 +668,39 @@ def test_generated_artifact_route_persists_lineage_and_enforces_source_ownership
 
     assert wrong_session_response.status_code == 404
 
-    bad_message_response = client.post(
-        f"/sessions/{owned_session['id']}/artifacts/generated",
+
+def test_chat_route_injects_artifact_context_message_into_model_history(api_client):
+    client, _, _, _, chat_model_service, _ = api_client
+
+    session = create_session_for(client, "valid-user-1", title="Artifact context")
+    upload_response = client.post(
+        f"/sessions/{session['id']}/artifacts/upload",
+        headers=auth_header("valid-user-1"),
+        files={"file": ("context.txt", b"artifact body for model", "text/plain")},
+        data={"metadata": "{}"},
+    )
+    assert upload_response.status_code == 201, upload_response.text
+    artifact = upload_response.json()
+
+    response = client.post(
+        f"/sessions/{session['id']}/chat",
         headers=auth_header("valid-user-1"),
         json={
-            "filename": "bad-message.txt",
-            "content_type": "text/plain",
-            "content_base64": base64.b64encode(b"bad message lineage").decode("ascii"),
-            "source_artifact_ids": [source_artifact["id"]],
-            "generated_by_message_id": "missing-message",
-            "metadata": {},
+            "content": "Please use the attachment",
+            "metadata": {"artifact_ids": [artifact["id"]]},
+            "tools": [],
         },
     )
 
-    assert bad_message_response.status_code == 404
+    assert response.status_code == 201, response.text
+    chat_model_service.generate_reply.assert_awaited_once()
+    call_kwargs = chat_model_service.generate_reply.await_args.kwargs
+    messages = call_kwargs["messages"]
+    assert messages[0].role == "system"
+    assert messages[0].metadata["message_type"] == "artifact_context"
+    assert "artifact body for model" in messages[0].content
+    assert messages[1].role == "user"
+    assert messages[1].content == "Please use the attachment"
 
 
 def test_chat_route_persists_generated_artifacts_from_tool_results(api_client):
@@ -922,5 +948,17 @@ def test_generate_session_summary_uses_messages_and_persisted_artifacts(api_clie
             "name": "plan.docx",
             "artifact_type": "docx",
             "location": uploaded_artifact["id"],
+        }
+    ]
+
+    call_kwargs = chat_model_service.generate_structured_summary.await_args.kwargs
+    context_payload = call_kwargs["context_payload"]
+    assert context_payload["artifact_prompt_context"] == [
+        {
+            "id": uploaded_artifact["id"],
+            "filename": "plan.docx",
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "metadata": {"label": "draft"},
+            "readability": "unreadable",
         }
     ]

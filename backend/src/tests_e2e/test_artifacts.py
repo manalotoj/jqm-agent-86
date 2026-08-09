@@ -288,6 +288,57 @@ def test_generated_artifact_rejects_source_from_wrong_session(
 
 
 @pytest.mark.e2e
+def test_chat_with_large_attached_artifact_preserves_only_user_and_assistant_messages(
+    e2e_authenticated_client,
+    e2e_http_client: httpx.Client,
+    session_factory,
+) -> None:
+    created_session = session_factory(
+        title=_unique_label("e2e-artifact-chat-context"),
+        metadata={"case": "artifact-chat-context", "nonce": _unique_label("artifact-chat")},
+    )
+    large_artifact = _upload_artifact(
+        session_id=created_session["id"],
+        e2e_authenticated_client=e2e_authenticated_client,
+        e2e_http_client=e2e_http_client,
+        filename="large-context.txt",
+        content=(b"A" * 25000),
+        metadata={"label": "large-context"},
+    )
+
+    chat_response = e2e_http_client.post(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/chat",
+        headers=e2e_authenticated_client.authorization_header,
+        json={
+            "content": (
+                "Use the attached file. If you cannot see the whole attachment, say clearly that only part of it was visible. "
+                "Repeat the exact phrase PARTIAL-ATTACHMENT-DISCLOSURE in your answer."
+            ),
+            "metadata": {"artifact_ids": [large_artifact["id"]]},
+            "tools": [],
+        },
+    )
+    assert chat_response.status_code == 201, chat_response.text
+
+    response_payload = chat_response.json()
+    assistant_message = response_payload["message"]
+    assert "PARTIAL-ATTACHMENT-DISCLOSURE" in assistant_message["content"]
+
+    messages_response = e2e_http_client.get(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/messages",
+        headers=e2e_authenticated_client.authorization_header,
+    )
+    assert messages_response.status_code == 200, messages_response.text
+    persisted_messages = messages_response.json()
+    assert len(persisted_messages) >= 2
+    assert persisted_messages[-2]["role"] == "user"
+    assert persisted_messages[-2]["metadata"]["artifact_ids"] == [large_artifact["id"]]
+    assert persisted_messages[-1]["role"] == "assistant"
+    assert persisted_messages[-1]["content"] == assistant_message["content"]
+    assert all(message["metadata"].get("message_type") != "artifact_context" for message in persisted_messages)
+
+
+@pytest.mark.e2e
 def test_artifact_access_rejects_wrong_session(
     e2e_authenticated_client,
     e2e_http_client: httpx.Client,

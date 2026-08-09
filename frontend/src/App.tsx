@@ -16,6 +16,8 @@ import {
 import {
   Bot,
   CheckCircle2,
+  PanelLeft,
+  PanelRight,
   Download,
   FileUp,
   LoaderCircle,
@@ -573,6 +575,8 @@ function AuthenticatedApp() {
   const [isArtifactDragActive, setIsArtifactDragActive] = useState(false);
   const [mainContentView, setMainContentView] = useState<MainContentView>("chat");
   const [isRegenerateSummaryDialogOpen, setIsRegenerateSummaryDialogOpen] = useState(false);
+  const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
+  const [isRightPaneOpen, setIsRightPaneOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const dismissNotice = (noticeId: string) => {
@@ -981,109 +985,152 @@ function AuthenticatedApp() {
     <>
       <ToastViewport notices={notices} onDismiss={dismissNotice} />
       <div className="flex min-h-svh bg-background text-foreground">
-      <aside className="flex w-full max-w-sm flex-col border-r bg-sidebar text-sidebar-foreground lg:w-96">
-        <div className="flex items-center gap-3 border-b px-4 py-4">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-sm">
-            <MessageSquare className="size-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">agent-86</p>
-            <p className="truncate text-xs text-sidebar-foreground/70">Session workspace</p>
-          </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={handleLoginOut}>
-                <LogOut className="size-4" />
-                <span className="sr-only">Sign out</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Sign out</TooltipContent>
-          </Tooltip>
-        </div>
-
-        <div className="space-y-3 border-b px-4 py-4">
-          <div className="flex items-center gap-3 rounded-xl border bg-sidebar-accent/50 px-3 py-3">
-            <Avatar className="size-10">
-              <AvatarFallback>{getInitials(activeAccount?.name)}</AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{activeAccount?.name ?? "Signed in"}</p>
-              <p className="truncate text-xs text-sidebar-foreground/70">
-                {activeAccount?.username ?? activeAccount?.localAccountId ?? "Microsoft Entra"}
-              </p>
+        <div className="flex border-r bg-sidebar text-sidebar-foreground">
+          {!isLeftPaneOpen ? (
+            <div className="flex w-14 flex-col items-center gap-3 px-2 py-4">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Expand sessions pane"
+                    onClick={() => setIsLeftPaneOpen(true)}
+                  >
+                    <PanelLeft className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Show sessions</TooltipContent>
+              </Tooltip>
             </div>
-          </div>
+          ) : null}
 
-          <div className="flex gap-2">
-            <Input
-              value={newSessionTitle}
-              onChange={(event) => setNewSessionTitle(event.target.value)}
-              placeholder="New session title"
-              className="bg-background"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  handleCreateSession();
-                }
-              }}
-            />
-            <Button
-              type="button"
-              onClick={handleCreateSession}
-              disabled={createSession.isPending}
-            >
-              <Plus className="size-4" />
-              New
-            </Button>
-          </div>
-        </div>
+          <aside
+            className={cn(
+              "overflow-hidden border-r bg-sidebar text-sidebar-foreground transition-[width,opacity] duration-200",
+              isLeftPaneOpen
+                ? "flex w-full max-w-sm flex-col opacity-100 lg:w-96"
+                : "w-0 border-r-0 opacity-0",
+            )}
+          >
+            <div className="flex items-center gap-3 border-b px-4 py-4">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-sm">
+                <MessageSquare className="size-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">agent-86</p>
+                <p className="truncate text-xs text-sidebar-foreground/70">Session workspace</p>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={handleLoginOut}>
+                    <LogOut className="size-4" />
+                    <span className="sr-only">Sign out</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Sign out</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Collapse sessions pane"
+                    onClick={() => setIsLeftPaneOpen(false)}
+                  >
+                    <PanelLeft className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Hide sessions</TooltipContent>
+              </Tooltip>
+            </div>
 
-        <div className="flex-1 overflow-y-auto px-3 py-4">
-          <div className="mb-3 flex items-center justify-between px-1">
-            <h2 className="text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase">
-              Sessions
-            </h2>
-            <span className="text-xs text-sidebar-foreground/60">{sessions.length}</span>
-          </div>
+            <div className="space-y-3 border-b px-4 py-4">
+              <div className="flex items-center gap-3 rounded-xl border bg-sidebar-accent/50 px-3 py-3">
+                <Avatar className="size-10">
+                  <AvatarFallback>{getInitials(activeAccount?.name)}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{activeAccount?.name ?? "Signed in"}</p>
+                  <p className="truncate text-xs text-sidebar-foreground/70">
+                    {activeAccount?.username ?? activeAccount?.localAccountId ?? "Microsoft Entra"}
+                  </p>
+                </div>
+              </div>
 
-          <div className="space-y-2">
-            {isLoading
-              ? Array.from({ length: 6 }).map((_, index) => (
-                  <div key={index} className="rounded-xl border border-sidebar-border/60 p-3">
-                    <Skeleton className="mb-2 h-4 w-2/3 bg-sidebar-accent" />
-                    <Skeleton className="h-3 w-1/2 bg-sidebar-accent" />
+              <div className="flex gap-2">
+                <Input
+                  value={newSessionTitle}
+                  onChange={(event) => setNewSessionTitle(event.target.value)}
+                  placeholder="New session title"
+                  className="bg-background"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      handleCreateSession();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  onClick={handleCreateSession}
+                  disabled={createSession.isPending}
+                >
+                  <Plus className="size-4" />
+                  New
+                </Button>
+              </div>
+            </div>
+
+
+            <div className="flex-1 overflow-y-auto px-3 py-4">
+              <div className="mb-3 flex items-center justify-between px-1">
+                <h2 className="text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase">
+                  Sessions
+                </h2>
+                <span className="text-xs text-sidebar-foreground/60">{sessions.length}</span>
+              </div>
+
+              <div className="space-y-2">
+                {isLoading
+                  ? Array.from({ length: 6 }).map((_, index) => (
+                      <div key={index} className="rounded-xl border border-sidebar-border/60 p-3">
+                        <Skeleton className="mb-2 h-4 w-2/3 bg-sidebar-accent" />
+                        <Skeleton className="h-3 w-1/2 bg-sidebar-accent" />
+                      </div>
+                    ))
+                  : null}
+
+                {!isLoading && error ? (
+                  <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                    {(error as Error).message || "Failed to load sessions."}
                   </div>
-                ))
-              : null}
+                ) : null}
 
-            {!isLoading && error ? (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                {(error as Error).message || "Failed to load sessions."}
+                {!isLoading && !error && sessions.length === 0 ? (
+                  <div className="rounded-xl border border-dashed px-4 py-6 text-sm text-sidebar-foreground/70">
+                    No sessions yet. Create one to begin chatting.
+                  </div>
+                ) : null}
+
+                {sessions.map((session) => (
+                  <SessionSidebarItem
+                    key={session.id}
+                    session={session}
+                    isActive={selectedSession?.id === session.id}
+                    onSelect={setSelectedSessionId}
+                    onRename={handleRenameSession}
+                    onDelete={(sessionId) => {
+                      const nextSession = sessions.find((item) => item.id === sessionId) ?? null;
+                      setSessionToDelete(nextSession);
+                    }}
+                    isDeleting={deleteSession.isPending && sessionToDelete?.id === session.id}
+                  />
+                ))}
               </div>
-            ) : null}
-
-            {!isLoading && !error && sessions.length === 0 ? (
-              <div className="rounded-xl border border-dashed px-4 py-6 text-sm text-sidebar-foreground/70">
-                No sessions yet. Create one to begin chatting.
-              </div>
-            ) : null}
-
-            {sessions.map((session) => (
-              <SessionSidebarItem
-                key={session.id}
-                session={session}
-                isActive={selectedSession?.id === session.id}
-                onSelect={setSelectedSessionId}
-                onRename={handleRenameSession}
-                onDelete={(sessionId) => {
-                  const nextSession = sessions.find((item) => item.id === sessionId) ?? null;
-                  setSessionToDelete(nextSession);
-                }}
-                isDeleting={deleteSession.isPending && sessionToDelete?.id === session.id}
-              />
-            ))}
-          </div>
+            </div>
+          </aside>
         </div>
-      </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b px-6 py-4">
@@ -1096,49 +1143,88 @@ function AuthenticatedApp() {
             </h1>
           </div>
 
-          {selectedSession ? (
-            <div className="hidden items-center gap-2 sm:flex">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleRenameSession(selectedSession)}
-                disabled={updateSession.isPending}
-              >
-                <Pencil className="size-4" />
-                Rename
-              </Button>
+          <div className="flex items-center gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={isLeftPaneOpen ? "Collapse sessions pane" : "Expand sessions pane"}
+                  onClick={() => setIsLeftPaneOpen((current) => !current)}
+                >
+                  <PanelLeft className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{isLeftPaneOpen ? "Hide sessions" : "Show sessions"}</TooltipContent>
+            </Tooltip>
 
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button type="button" variant="outline">
-                    <Trash2 className="size-4" />
-                    Delete
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Delete session?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This removes <strong>{getDisplayTitle(selectedSession)}</strong> from your
-                      session list.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      variant="destructive"
-                      onClick={() => handleDeleteSession(selectedSession.id)}
-                    >
-                      Delete session
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </div>
-          ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={isRightPaneOpen ? "Collapse details pane" : "Expand details pane"}
+                  onClick={() => setIsRightPaneOpen((current) => !current)}
+                >
+                  <PanelRight className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{isRightPaneOpen ? "Hide details" : "Show details"}</TooltipContent>
+            </Tooltip>
+
+            {selectedSession ? (
+              <div className="hidden items-center gap-2 sm:flex">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleRenameSession(selectedSession)}
+                  disabled={updateSession.isPending}
+                >
+                  <Pencil className="size-4" />
+                  Rename
+                </Button>
+
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button type="button" variant="outline">
+                      <Trash2 className="size-4" />
+                      Delete
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete session?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This removes <strong>{getDisplayTitle(selectedSession)}</strong> from your
+                        session list.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        onClick={() => handleDeleteSession(selectedSession.id)}
+                      >
+                        Delete session
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            ) : null}
+          </div>
         </header>
 
-        <div className="grid flex-1 gap-6 p-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.85fr)]">
+        <div
+          className={cn(
+            "grid flex-1 gap-6 p-6",
+            isRightPaneOpen
+              ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.85fr)]"
+              : "xl:grid-cols-[minmax(0,1fr)]",
+          )}
+        >
           <section className="flex min-h-0 flex-col rounded-2xl border bg-card shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-5">
               <div>
@@ -1386,8 +1472,7 @@ function AuthenticatedApp() {
               </div>
             </div>
           </section>
-
-          <section className="space-y-6">
+          <section className={cn("space-y-6", !isRightPaneOpen && "hidden")}>
             <div className="rounded-2xl border bg-card p-6 shadow-sm">
               <p className="text-sm font-medium text-muted-foreground">Authenticated as</p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -1600,6 +1685,7 @@ function AuthenticatedApp() {
             </div>
 
           </section>
+
         </div>
       </main>
 

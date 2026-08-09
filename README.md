@@ -258,7 +258,9 @@ Artifact behavior notes:
 - Artifact metadata is stored in Cosmos DB in a dedicated artifacts container.
 - Session summaries are stored in Cosmos DB in a dedicated summaries container.
 - Chat requests may include `metadata.artifact_ids` to attach previously uploaded session artifacts.
-- Current attachment support validates ownership/session membership and persists normalized artifact IDs on the user message; it does not yet inject artifact file content into model prompts.
+- Supported text attachments are injected into model context at chat time using full-content, head+tail, or truncated excerpts depending on size.
+- When only partial attachment content is provided, the model is instructed to disclose that limitation in its answer.
+- Unsupported or unreadable attachments are surfaced to the model as unreadable notes rather than silently ignored.
 - If a dev or e2e Cosmos account is missing the artifacts metadata container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_artifacts_container.zsh --resource-group <rg> --account-name <cosmos-account>` to create `artifacts` with partition key `/session_id`.
 - If a dev or e2e Cosmos account is missing the summaries container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_summaries_container.zsh --resource-group <rg> --account-name <cosmos-account>` to create `summaries` with partition key `/user_id`, or use `--all-dev-accounts` to apply the same container to every Cosmos account in `rg-agent86-dev`.
 - To provision dedicated Azure Blob Storage for artifact uploads in dev/e2e, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/create_artifact_blob_storage.zsh --resource-group <rg>`. The helper creates one StorageV2 account per environment plus the `agent86-artifacts` container by default.

@@ -11,6 +11,7 @@ from agent_86.auth.dependencies import get_authenticated_user
 from agent_86.auth.models import AuthenticatedUser
 from agent_86.api.dependencies import (
     get_artifact_service,
+    get_artifact_prompt_context_service,
     get_chat_model_service,
     get_message_service,
     get_model_router,
@@ -21,6 +22,7 @@ from agent_86.domain.models.message import Message
 from agent_86.domain.schemas.chat import ChatRequest, ChatResponse, ChatStreamEvent as ChatStreamEventSchema
 from agent_86.domain.schemas.message import CreateMessageRequest, MessageResponse
 from agent_86.services.artifact_service import ArtifactNotFoundError, ArtifactService
+from agent_86.services.artifact_prompt_context_service import ArtifactPromptContextService
 from agent_86.services.chat_model_service import ChatModelReply, ChatModelService, ChatStreamEvent
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
@@ -298,6 +300,7 @@ async def prepare_chat_context(
     request: ChatRequest,
     *,
     artifact_service: ArtifactService,
+    artifact_prompt_context_service: ArtifactPromptContextService,
     message_service: MessageService,
     session_service: SessionService,
     model_router: ModelRouter,
@@ -321,6 +324,15 @@ async def prepare_chat_context(
     tool_names = choose_tool_names(request.content, request.metadata)
     history = await message_service.list_messages(user_id, session_id)
 
+    artifact_ids = request.metadata.get("artifact_ids", []) if isinstance(request.metadata, dict) else []
+    artifact_prompt_context = await artifact_prompt_context_service.build_message_for_artifact_ids(
+        user_id=user_id,
+        session_id=session_id,
+        artifact_ids=artifact_ids if isinstance(artifact_ids, list) else [],
+    )
+    if artifact_prompt_context.context_message is not None:
+        history = [artifact_prompt_context.context_message, *history]
+
     return selected_model, tool_names, history
 
 
@@ -338,6 +350,7 @@ async def chat(
     request: ChatRequest,
     user: AuthenticatedUser = Depends(get_authenticated_user),
     artifact_service: ArtifactService = Depends(get_artifact_service),
+    artifact_prompt_context_service: ArtifactPromptContextService = Depends(get_artifact_prompt_context_service),
     message_service: MessageService = Depends(get_message_service),
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
@@ -351,6 +364,7 @@ async def chat(
         session_id=session_id,
         request=request,
         artifact_service=artifact_service,
+        artifact_prompt_context_service=artifact_prompt_context_service,
         message_service=message_service,
         session_service=session_service,
         model_router=model_router,
@@ -387,6 +401,7 @@ async def chat_stream(
     request: ChatRequest,
     user: AuthenticatedUser = Depends(get_authenticated_user),
     artifact_service: ArtifactService = Depends(get_artifact_service),
+    artifact_prompt_context_service: ArtifactPromptContextService = Depends(get_artifact_prompt_context_service),
     message_service: MessageService = Depends(get_message_service),
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
@@ -403,6 +418,7 @@ async def chat_stream(
             session_id=session_id,
             request=request,
             artifact_service=artifact_service,
+            artifact_prompt_context_service=artifact_prompt_context_service,
             message_service=message_service,
             session_service=session_service,
             model_router=model_router,

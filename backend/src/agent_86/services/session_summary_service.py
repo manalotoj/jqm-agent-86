@@ -6,6 +6,7 @@ from agent_86.domain.models.session_summary import SessionSummary
 from agent_86.domain.schemas.session_summary import ArtifactRef, ChatSessionSummary
 from agent_86.repositories.session_summary_repository import SessionSummaryRepository
 from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.artifact_prompt_context_service import ArtifactPromptContextService
 from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
 from agent_86.services.session_service import SessionService
@@ -18,6 +19,7 @@ Do not call tools, do not invent external facts, and do not mention missing cont
 Generate a concise title based on the session context instead of copying the stored session title.
 artifact refs may include persisted artifacts and meaningful generated outputs or references present in the message history.
 Keep lists concise and useful for later retrieval.
+If artifact metadata indicates unsupported or partially visible attachments, reflect that accurately instead of implying full inspection.
 """
 
 
@@ -34,12 +36,14 @@ class SessionSummaryService:
         session_service: SessionService,
         message_service: MessageService,
         artifact_service: ArtifactService,
+        artifact_prompt_context_service: ArtifactPromptContextService,
         chat_model_service: ChatModelService,
     ) -> None:
         self._repository = repository
         self._session_service = session_service
         self._message_service = message_service
         self._artifact_service = artifact_service
+        self._artifact_prompt_context_service = artifact_prompt_context_service
         self._chat_model_service = chat_model_service
 
     async def get_summary(self, user_id: str, session_id: str) -> SessionSummary:
@@ -117,6 +121,7 @@ class SessionSummaryService:
                 }
                 for artifact in artifacts
             ],
+            "artifact_prompt_context": self._artifact_prompt_context_service.build_summary_artifact_details(artifacts),
         }
 
     def _merge_tools_used(self, model_tools_used: list[str], messages: list[Message]) -> list[str]:

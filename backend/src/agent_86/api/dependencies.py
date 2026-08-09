@@ -9,6 +9,7 @@ from agent_86.repositories.cosmos_message_repository import CosmosMessageReposit
 from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
 from agent_86.repositories.cosmos_session_summary_repository import CosmosSessionSummaryRepository
 from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.artifact_prompt_context_service import ArtifactPromptContextService
 from agent_86.services.azure_blob_storage_service import AzureBlobStorageService
 from agent_86.services.blob_storage_service import BlobStorageService
 from agent_86.services.chat_model_service import ChatModelService
@@ -118,6 +119,11 @@ def _artifact_service_instance() -> ArtifactService:
 
 
 @lru_cache(maxsize=1)
+def _artifact_prompt_context_service_instance() -> ArtifactPromptContextService:
+    return ArtifactPromptContextService(_artifact_service_instance())
+
+
+@lru_cache(maxsize=1)
 def _chat_model_service() -> ChatModelService:
     return ChatModelService(_settings())
 
@@ -139,6 +145,7 @@ def _session_summary_service_instance() -> SessionSummaryService:
         _session_service_instance(),
         _message_service_instance(),
         _artifact_service_instance(),
+        _artifact_prompt_context_service_instance(),
         _chat_model_service(),
     )
 
@@ -153,6 +160,10 @@ def get_message_service() -> MessageService:
 
 def get_artifact_service() -> ArtifactService:
     return _artifact_service_instance()
+
+
+def get_artifact_prompt_context_service() -> ArtifactPromptContextService:
+    return _artifact_prompt_context_service_instance()
 
 
 def get_chat_model_service() -> ChatModelService:
