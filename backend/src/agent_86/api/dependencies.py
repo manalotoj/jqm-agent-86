@@ -3,8 +3,12 @@ from functools import lru_cache
 from azure.cosmos.aio import CosmosClient
 
 from agent_86.core.config import Settings, get_settings
+from agent_86.repositories.cosmos_artifact_repository import CosmosArtifactRepository
 from agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
 from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
+from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.azure_blob_storage_service import AzureBlobStorageService
+from agent_86.services.blob_storage_service import BlobStorageService
 from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
@@ -45,6 +49,13 @@ def _messages_container():
 
 
 @lru_cache(maxsize=1)
+def _artifacts_container():
+    settings = _settings()
+    database = _cosmos_client().get_database_client(settings.cosmos_database_name)
+    return database.get_container_client(settings.cosmos_artifacts_container_name)
+
+
+@lru_cache(maxsize=1)
 def _session_repository() -> CosmosSessionRepository:
     return CosmosSessionRepository(_sessions_container())
 
@@ -52,6 +63,20 @@ def _session_repository() -> CosmosSessionRepository:
 @lru_cache(maxsize=1)
 def _message_repository() -> CosmosMessageRepository:
     return CosmosMessageRepository(_messages_container())
+
+
+@lru_cache(maxsize=1)
+def _artifact_repository() -> CosmosArtifactRepository:
+    return CosmosArtifactRepository(_artifacts_container())
+
+
+@lru_cache(maxsize=1)
+def _blob_storage_service() -> BlobStorageService:
+    settings = _settings()
+    return AzureBlobStorageService(
+        connection_string=settings.azure_blob_connection_string,
+        container_name=settings.azure_blob_container_name,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -67,6 +92,11 @@ def _session_service_instance() -> SessionService:
 @lru_cache(maxsize=1)
 def _message_service_instance() -> MessageService:
     return MessageService(_message_repository())
+
+
+@lru_cache(maxsize=1)
+def _artifact_service_instance() -> ArtifactService:
+    return ArtifactService(_artifact_repository(), _blob_storage_service())
 
 
 @lru_cache(maxsize=1)
@@ -90,6 +120,10 @@ def get_session_service() -> SessionService:
 
 def get_message_service() -> MessageService:
     return _message_service_instance()
+
+
+def get_artifact_service() -> ArtifactService:
+    return _artifact_service_instance()
 
 
 def get_chat_model_service() -> ChatModelService:

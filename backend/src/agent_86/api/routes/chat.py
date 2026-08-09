@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from agent_86.auth.dependencies import get_authenticated_user
 from agent_86.auth.models import AuthenticatedUser
 from agent_86.api.dependencies import (
+    get_artifact_service,
     get_chat_model_service,
     get_message_service,
     get_model_router,
@@ -17,6 +18,7 @@ from agent_86.api.dependencies import (
 from agent_86.domain.models.message import Message
 from agent_86.domain.schemas.chat import ChatRequest, ChatResponse, ChatStreamEvent as ChatStreamEventSchema
 from agent_86.domain.schemas.message import CreateMessageRequest, MessageResponse
+from agent_86.services.artifact_service import ArtifactNotFoundError, ArtifactService
 from agent_86.services.chat_model_service import ChatModelReply, ChatModelService, ChatStreamEvent
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
@@ -97,6 +99,31 @@ def build_assistant_metadata(selected_model: str, tool_names: list[str]) -> dict
     }
 
 
+async def validate_and_enrich_request_metadata(
+    user_id: str,
+    session_id: str,
+    request: ChatRequest,
+    artifact_service: ArtifactService,
+) -> None:
+    artifact_ids = request.metadata.get("artifact_ids")
+    if artifact_ids is None:
+        return
+
+    try:
+        validated_ids = await artifact_service.validate_artifact_ids(
+            user_id=user_id,
+            session_id=session_id,
+            artifact_ids=artifact_ids,
+        )
+    except ArtifactNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    request.metadata["artifact_ids"] = validated_ids
+
+
 async def create_user_message(
     user_id: str,
     session_id: str,
@@ -163,10 +190,18 @@ async def prepare_chat_context(
     session_id: str,
     request: ChatRequest,
     *,
+    artifact_service: ArtifactService,
     message_service: MessageService,
     session_service: SessionService,
     model_router: ModelRouter,
 ) -> tuple[str, list[str], list[Message]]:
+    await validate_and_enrich_request_metadata(
+        user_id=user_id,
+        session_id=session_id,
+        request=request,
+        artifact_service=artifact_service,
+    )
+
     await create_user_message(user_id, session_id, request, message_service)
 
     await session_service.maybe_title_session_from_prompt(
@@ -195,6 +230,7 @@ async def chat(
     session_id: str,
     request: ChatRequest,
     user: AuthenticatedUser = Depends(get_authenticated_user),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
     message_service: MessageService = Depends(get_message_service),
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
@@ -207,6 +243,7 @@ async def chat(
         user_id=user.user_id,
         session_id=session_id,
         request=request,
+        artifact_service=artifact_service,
         message_service=message_service,
         session_service=session_service,
         model_router=model_router,
@@ -237,6 +274,7 @@ async def chat_stream(
     session_id: str,
     request: ChatRequest,
     user: AuthenticatedUser = Depends(get_authenticated_user),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
     message_service: MessageService = Depends(get_message_service),
     session_service: SessionService = Depends(get_session_service),
     chat_model_service: ChatModelService = Depends(get_chat_model_service),
@@ -252,6 +290,7 @@ async def chat_stream(
             user_id=user.user_id,
             session_id=session_id,
             request=request,
+            artifact_service=artifact_service,
             message_service=message_service,
             session_service=session_service,
             model_router=model_router,

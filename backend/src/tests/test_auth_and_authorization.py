@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("COSMOS_ENDPOINT", "https://example.documents.azure.com:443/")
 os.environ.setdefault("COSMOS_KEY", "test-cosmos-key")
 os.environ.setdefault("COSMOS_DATABASE_NAME", "agent86-test")
+os.environ.setdefault("AZURE_BLOB_CONNECTION_STRING", "UseDevelopmentStorage=true")
+os.environ.setdefault("AZURE_BLOB_CONTAINER_NAME", "agent86-test-artifacts")
 os.environ.setdefault("FOUNDRY_OPENAI_BASE_URL", "https://example.openai.azure.com/")
 os.environ.setdefault("FOUNDRY_OPENAI_API_KEY", "test-openai-key")
 os.environ.setdefault("FOUNDRY_DEFAULT_CHAT_MODEL", "gpt-4.1-mini")
@@ -21,6 +23,7 @@ os.environ.setdefault(
 )
 
 from agent_86.api.dependencies import (
+    get_artifact_service,
     get_chat_model_service,
     get_message_service,
     get_model_router,
@@ -30,11 +33,15 @@ from agent_86.api.dependencies import (
 from agent_86.auth.dependencies import get_token_validator
 from agent_86.auth.provider import TokenValidationError
 from agent_86.core.config import get_settings
+from agent_86.domain.models.artifact import Artifact
 from agent_86.domain.models.message import Message
+from agent_86.domain.schemas.artifact import CreateArtifactRequest
 from agent_86.domain.schemas.message import CreateMessageRequest
 from agent_86.domain.schemas.session import CreateSessionRequest
 from agent_86.main import create_app
 from agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
+from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.blob_storage_service import BlobDownload
 from agent_86.services.chat_model_service import ChatModelReply
 from agent_86.services.message_service import MessageService
 from agent_86.services.session_service import SessionService
@@ -102,12 +109,86 @@ class InMemoryMessageRepository:
             del self._messages[message_id]
 
 
+class InMemoryArtifactRepository:
+    def __init__(self) -> None:
+        self._artifacts: dict[str, Artifact] = {}
+
+    async def create_artifact(
+        self,
+        session_id: str,
+        user_id: str,
+        request: CreateArtifactRequest,
+    ) -> Artifact:
+        artifact = Artifact(
+            id=request.artifact_id,
+            session_id=session_id,
+            user_id=user_id,
+            filename=request.filename,
+            content_type=request.content_type,
+            size_bytes=request.size_bytes,
+            blob_name=request.blob_name,
+            metadata=request.metadata,
+            created_at=datetime.now(UTC),
+        )
+        self._artifacts[artifact.id] = artifact
+        return artifact
+
+    async def get_artifact(
+        self,
+        user_id: str,
+        session_id: str,
+        artifact_id: str,
+    ) -> Artifact | None:
+        artifact = self._artifacts.get(artifact_id)
+        if artifact is None:
+            return None
+        if artifact.user_id != user_id or artifact.session_id != session_id:
+            return None
+        return artifact
+
+    async def list_artifacts(self, user_id: str, session_id: str) -> list[Artifact]:
+        return sorted(
+            [
+                artifact
+                for artifact in self._artifacts.values()
+                if artifact.user_id == user_id and artifact.session_id == session_id
+            ],
+            key=lambda artifact: artifact.created_at or datetime.min.replace(tzinfo=UTC),
+        )
+
+    async def delete_artifacts_for_session(
+        self,
+        user_id: str,
+        session_id: str,
+    ) -> list[Artifact]:
+        artifacts = await self.list_artifacts(user_id, session_id)
+        for artifact in artifacts:
+            del self._artifacts[artifact.id]
+        return artifacts
+
+
+class InMemoryBlobStorageService:
+    def __init__(self) -> None:
+        self._blobs: dict[str, BlobDownload] = {}
+
+    async def upload_blob(self, blob_name: str, content: bytes, content_type: str) -> None:
+        self._blobs[blob_name] = BlobDownload(content=content, content_type=content_type)
+
+    async def download_blob(self, blob_name: str) -> BlobDownload:
+        return self._blobs[blob_name]
+
+    async def delete_blob(self, blob_name: str) -> None:
+        self._blobs.pop(blob_name, None)
+
+
 @pytest.fixture(autouse=True)
 def configured_environment(monkeypatch: pytest.MonkeyPatch):
     values = {
         "COSMOS_ENDPOINT": "https://example.documents.azure.com:443/",
         "COSMOS_KEY": "test-cosmos-key",
         "COSMOS_DATABASE_NAME": "agent86-test",
+        "AZURE_BLOB_CONNECTION_STRING": "UseDevelopmentStorage=true",
+        "AZURE_BLOB_CONTAINER_NAME": "agent86-test-artifacts",
         "FOUNDRY_OPENAI_BASE_URL": "https://example.openai.azure.com/",
         "FOUNDRY_OPENAI_API_KEY": "test-openai-key",
         "FOUNDRY_DEFAULT_CHAT_MODEL": "gpt-4.1-mini",
@@ -131,6 +212,10 @@ def api_client():
 
     session_service = SessionService(InMemorySessionRepository())
     message_service = MessageService(InMemoryMessageRepository())
+    artifact_service = ArtifactService(
+        InMemoryArtifactRepository(),
+        InMemoryBlobStorageService(),
+    )
     chat_model_service = SimpleNamespace(
         generate_reply=AsyncMock(
             return_value=ChatModelReply(
@@ -154,12 +239,13 @@ def api_client():
     app.dependency_overrides[get_token_validator] = lambda: token_validator
     app.dependency_overrides[get_session_service] = lambda: session_service
     app.dependency_overrides[get_message_service] = lambda: message_service
+    app.dependency_overrides[get_artifact_service] = lambda: artifact_service
     app.dependency_overrides[get_chat_model_service] = lambda: chat_model_service
     app.dependency_overrides[get_model_router] = lambda: model_router
     app.dependency_overrides[get_tool_service] = lambda: tool_service
 
     with TestClient(app) as client:
-        yield client, session_service, message_service, chat_model_service
+        yield client, session_service, message_service, artifact_service, chat_model_service
 
 
 def auth_header(token: str) -> dict[str, str]:
@@ -177,7 +263,7 @@ def create_session_for(client: TestClient, token: str, title: str = "Session") -
 
 
 def test_missing_token_returns_401(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     response = client.get("/sessions")
 
@@ -186,7 +272,7 @@ def test_missing_token_returns_401(api_client):
 
 
 def test_invalid_token_returns_401(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     response = client.get("/sessions", headers=auth_header("not-a-valid-token"))
 
@@ -195,7 +281,7 @@ def test_invalid_token_returns_401(api_client):
 
 
 def test_valid_token_authenticates_user_by_oid(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     created = create_session_for(client, "valid-user-1", title="Owned by oid")
     listed = client.get("/sessions", headers=auth_header("valid-user-1"))
@@ -206,7 +292,7 @@ def test_valid_token_authenticates_user_by_oid(api_client):
 
 
 def test_sub_claim_is_used_when_oid_is_missing(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     response = client.post(
         "/sessions",
@@ -219,7 +305,7 @@ def test_sub_claim_is_used_when_oid_is_missing(api_client):
 
 
 def test_token_missing_oid_and_sub_is_rejected(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     response = client.get("/sessions", headers=auth_header("missing-identity"))
 
@@ -228,7 +314,7 @@ def test_token_missing_oid_and_sub_is_rejected(api_client):
 
 
 def test_allowed_origin_get_response_includes_cors_header(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     response = client.get(
         "/sessions",
@@ -244,7 +330,7 @@ def test_allowed_origin_get_response_includes_cors_header(api_client):
 
 
 def test_allowed_origin_preflight_returns_cors_headers(api_client):
-    client, _, _, _ = api_client
+    client, _, _, _, _ = api_client
 
     response = client.options(
         "/sessions",
@@ -264,7 +350,7 @@ def test_allowed_origin_preflight_returns_cors_headers(api_client):
 
 
 def test_session_ownership_is_enforced_for_list_get_update_delete_and_messages(api_client):
-    client, session_service, message_service, _ = api_client
+    client, session_service, message_service, _, _ = api_client
 
     owned = create_session_for(client, "valid-user-1", title="User 1 session")
     other = create_session_for(client, "valid-user-2", title="User 2 session")
@@ -319,7 +405,7 @@ def test_session_ownership_is_enforced_for_list_get_update_delete_and_messages(a
 
 
 def test_chat_route_passes_authenticated_user_into_tool_context(api_client):
-    client, _, _, chat_model_service = api_client
+    client, _, _, _, chat_model_service = api_client
 
     session = create_session_for(client, "valid-user-1", title="Chat session")
 
@@ -342,6 +428,80 @@ def test_chat_route_passes_authenticated_user_into_tool_context(api_client):
     assert isinstance(tool_context, ToolContext)
     assert tool_context.user_id == "user-1"
     assert tool_context.session_id == session["id"]
+
+
+def test_artifact_routes_and_chat_attachment_metadata_enforce_ownership(api_client):
+    client, _, _, _, _ = api_client
+
+    owned_session = create_session_for(client, "valid-user-1", title="Owned")
+    other_session = create_session_for(client, "valid-user-2", title="Other")
+
+    upload_response = client.post(
+        f"/sessions/{owned_session['id']}/artifacts/upload",
+        headers=auth_header("valid-user-1"),
+        files={"file": ("notes.txt", b"hello artifact", "text/plain")},
+        data={"metadata": '{"label": "primary"}'},
+    )
+
+    assert upload_response.status_code == 201, upload_response.text
+    artifact = upload_response.json()
+
+    list_response = client.get(
+        f"/sessions/{owned_session['id']}/artifacts",
+        headers=auth_header("valid-user-1"),
+    )
+    get_response = client.get(
+        f"/sessions/{owned_session['id']}/artifacts/{artifact['id']}",
+        headers=auth_header("valid-user-1"),
+    )
+    download_response = client.get(
+        f"/sessions/{owned_session['id']}/artifacts/{artifact['id']}/download",
+        headers=auth_header("valid-user-1"),
+    )
+
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == [artifact["id"]]
+    assert get_response.status_code == 200
+    assert get_response.json()["metadata"] == {"label": "primary"}
+    assert download_response.status_code == 200
+    assert download_response.content == b"hello artifact"
+
+    wrong_user_get = client.get(
+        f"/sessions/{owned_session['id']}/artifacts/{artifact['id']}",
+        headers=auth_header("valid-user-2"),
+    )
+    wrong_session_chat = client.post(
+        f"/sessions/{other_session['id']}/chat",
+        headers=auth_header("valid-user-2"),
+        json={
+            "content": "Try to use another user's artifact",
+            "metadata": {"artifact_ids": [artifact["id"]]},
+            "tools": [],
+        },
+    )
+
+    assert wrong_user_get.status_code == 404
+    assert wrong_session_chat.status_code == 404
+
+    own_chat = client.post(
+        f"/sessions/{owned_session['id']}/chat",
+        headers=auth_header("valid-user-1"),
+        json={
+            "content": "Use my attachment",
+            "metadata": {"artifact_ids": [artifact["id"], artifact["id"]]},
+            "tools": [],
+        },
+    )
+
+    assert own_chat.status_code == 201, own_chat.text
+
+    persisted_messages = client.get(
+        f"/sessions/{owned_session['id']}/messages",
+        headers=auth_header("valid-user-1"),
+    )
+    assert persisted_messages.status_code == 200
+    user_messages = [message for message in persisted_messages.json() if message["role"] == "user"]
+    assert user_messages[-1]["metadata"] == {"artifact_ids": [artifact["id"]]}
 
 
 def test_startup_fails_with_concise_error_when_auth_configuration_is_missing(

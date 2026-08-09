@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     cosmos_database_name: str = Field(min_length=3)
     cosmos_sessions_container_name: str = "sessions"
     cosmos_messages_container_name: str = "messages"
+    cosmos_artifacts_container_name: str = "artifacts"
     cosmos_verify_ssl: bool = True
+
+    azure_blob_connection_string: str = Field(min_length=1)
+    azure_blob_container_name: str = Field(min_length=1)
 
     foundry_openai_base_url: str
     foundry_openai_api_key: str = Field(min_length=1)

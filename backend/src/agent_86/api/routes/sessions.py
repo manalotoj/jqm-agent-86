@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from agent_86.auth.dependencies import get_authenticated_user
 from agent_86.auth.models import AuthenticatedUser
-from agent_86.api.dependencies import get_message_service, get_session_service
+from agent_86.api.dependencies import get_artifact_service, get_message_service, get_session_service
 from agent_86.domain.models.session import Session
 from agent_86.domain.schemas.session import (
     CreateSessionRequest,
@@ -10,6 +10,7 @@ from agent_86.domain.schemas.session import (
     UpdateSessionRequest,
 )
 from agent_86.services.message_service import MessageService
+from agent_86.services.artifact_service import ArtifactService
 from agent_86.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -89,6 +90,7 @@ async def delete_session(
     user: AuthenticatedUser = Depends(get_authenticated_user),
     session_service: SessionService = Depends(get_session_service),
     message_service: MessageService = Depends(get_message_service),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
 ) -> Response:
     session = await session_service.get_session(user.user_id, session_id)
 
@@ -98,6 +100,7 @@ async def delete_session(
             detail=f"Session '{session_id}' not found",
         )
 
+    await artifact_service.delete_artifacts_for_session(user.user_id, session_id)
     await message_service.delete_messages_for_session(user.user_id, session_id)
     await session_service.delete_session(user.user_id, session_id)
 
