@@ -9,6 +9,7 @@ from agent_86.core.errors import ConfigurationError
 class Settings(BaseSettings):
     app_name: str = "agent-86"
     app_env: str = "dev"
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     cosmos_endpoint: str
     cosmos_key: str
@@ -47,6 +48,14 @@ class Settings(BaseSettings):
         return (
             f"{self.entra_authority}/v2.0/.well-known/openid-configuration"
         )
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
 
 
 def _format_validation_error(exc: ValidationError) -> str:

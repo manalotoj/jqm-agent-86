@@ -187,6 +187,7 @@ Shared settings used by both the FastAPI API and the Streamlit UI:
 ```env
 APP_NAME=agent-86
 APP_ENV=dev
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 ENTRA_TENANT_ID=your-tenant-id
 ENTRA_API_CLIENT_ID=your-backend-api-app-client-id

@@ -227,6 +227,42 @@ def test_token_missing_oid_and_sub_is_rejected(api_client):
     assert response.json()["detail"] == "Token is missing oid/sub claim"
 
 
+def test_allowed_origin_get_response_includes_cors_header(api_client):
+    client, _, _, _ = api_client
+
+    response = client.get(
+        "/sessions",
+        headers={
+            **auth_header("valid-user-1"),
+            "Origin": "http://localhost:5173",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert "Origin" in response.headers["vary"]
+
+
+def test_allowed_origin_preflight_returns_cors_headers(api_client):
+    client, _, _, _ = api_client
+
+    response = client.options(
+        "/sessions",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert response.headers["access-control-allow-methods"]
+    allowed_headers = response.headers["access-control-allow-headers"].lower()
+    assert "authorization" in allowed_headers
+    assert "content-type" in allowed_headers
+
+
 def test_session_ownership_is_enforced_for_list_get_update_delete_and_messages(api_client):
     client, session_service, message_service, _ = api_client
 
