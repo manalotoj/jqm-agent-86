@@ -13,6 +13,7 @@ from agent_86.core.config import Settings
 from agent_86.domain.models.message import Message, MessageRole
 from agent_86.tools.tool import ToolContext, ToolResult
 from agent_86.services.tool_service import ToolService
+from agent_86.services.tool_selection import should_require_web_search
 from agent_86.tools.tool_registry import ToolRegistry
 
 
@@ -27,6 +28,7 @@ class GeneratedTranscriptMessage:
 class ChatModelReply:
     assistant_text: str
     transcript_messages: list[GeneratedTranscriptMessage]
+    tool_results: list[ToolResult] = field(default_factory=list)
 
 
 @dataclass
@@ -106,12 +108,21 @@ class ChatModelService:
             tool_context = ToolContext(session_id="unknown", user_id="unknown", metadata={})
 
         tools_schema = self._build_tools_schema(available_tool_names)
-        tool_choice = "required" if tools_schema else None
         conversation_items = [self._message_to_responses_item(message) for message in messages]
         transcript_events: list[GeneratedTranscriptMessage] = []
         streamed_text_parts: list[str] = []
+        collected_tool_results: list[ToolResult] = []
+        latest_user_message = self._get_latest_user_message(messages)
 
         while True:
+            tool_choice = None
+            if tools_schema:
+                tool_choice = self._resolve_tool_choice(
+                    available_tool_names=available_tool_names,
+                    latest_user_message=latest_user_message,
+                    collected_tool_results=collected_tool_results,
+                )
+
             try:
                 if stream:
                     response, streamed_text = await self._stream_response(
@@ -140,6 +151,7 @@ class ChatModelService:
                 return ChatModelReply(
                     assistant_text=f"OpenAI API error: {str(exc)}",
                     transcript_messages=transcript_events,
+                    tool_results=collected_tool_results,
                 )
 
             function_calls = self._extract_function_calls(response)
@@ -151,6 +163,7 @@ class ChatModelService:
                 return ChatModelReply(
                     assistant_text=final_text,
                     transcript_messages=transcript_events,
+                    tool_results=collected_tool_results,
                 )
 
             for call in function_calls:
@@ -186,6 +199,7 @@ class ChatModelService:
                     content="No result",
                     metadata={},
                 )
+                collected_tool_results.append(tool_result)
 
                 transcript_events.append(
                     GeneratedTranscriptMessage(
@@ -325,6 +339,31 @@ class ChatModelService:
             ]
 
         return []
+
+    def _get_latest_user_message(self, messages: list[Message]) -> str:
+        for message in reversed(messages):
+            if message.role == "user":
+                return message.content
+
+        return ""
+
+    def _resolve_tool_choice(
+        self,
+        *,
+        available_tool_names: list[str],
+        latest_user_message: str,
+        collected_tool_results: list[ToolResult],
+    ) -> str | None:
+        if not available_tool_names:
+            return None
+
+        if collected_tool_results:
+            return "auto"
+
+        if "web_search" in available_tool_names and should_require_web_search(latest_user_message):
+            return "required"
+
+        return "auto"
 
     async def _stream_response(
         self,

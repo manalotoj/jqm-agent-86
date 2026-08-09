@@ -12,11 +12,27 @@ class MessageRepository(Protocol):
         request: CreateMessageRequest,
     ) -> Message: ...
 
+    async def get_message(
+        self,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+    ) -> Message | None: ...
+
     async def list_messages(
         self,
         user_id: str,
         session_id: str,
     ) -> list[Message]: ...
+
+    async def update_message_metadata(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+        metadata: dict,
+    ) -> Message | None: ...
 
     async def delete_messages_for_session(
         self,

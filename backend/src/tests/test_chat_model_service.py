@@ -6,6 +6,7 @@ import pytest
 from agent_86.domain.models.message import Message
 from agent_86.services.chat_model_service import ChatModelService
 from agent_86.tools.tool import ToolContext, ToolResult
+from agent_86.tools.web_search_tool import WebSearchTool
 
 
 class FakeAsyncStream:
@@ -57,6 +58,7 @@ async def test_generate_reply_returns_final_text_without_transcript_for_plain_as
     mock_create.assert_called_once()
     assert reply.assistant_text == "Hello! How can I help?"
     assert reply.transcript_messages == []
+    assert reply.tool_results == []
 
 
 @pytest.mark.asyncio
@@ -106,7 +108,7 @@ async def test_generate_reply_persists_only_tool_transcript_messages_before_fina
     first_call_kwargs = mock_create.await_args_list[0].kwargs
     second_call_kwargs = mock_create.await_args_list[1].kwargs
     assert first_call_kwargs["tool_choice"] == "required"
-    assert second_call_kwargs["tool_choice"] == "required"
+    assert second_call_kwargs["tool_choice"] == "auto"
     assert reply.assistant_text == "Here is the latest AI news summary."
     assert len(reply.transcript_messages) == 2
 
@@ -119,11 +121,42 @@ async def test_generate_reply_persists_only_tool_transcript_messages_before_fina
     assert tool_output_message.role == "tool"
     assert tool_output_message.content == "Search results"
     assert tool_output_message.metadata["message_type"] == "function_call_output"
+    assert len(reply.tool_results) == 1
+    assert reply.tool_results[0].tool_name == "web_search"
 
     assert all(
         message.content != reply.assistant_text
         for message in reply.transcript_messages
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_with_enabled_web_search_does_not_force_tool_for_non_current_prompt():
+    service, mock_create = build_service_with_mocked_responses(
+        SimpleNamespace(output_text="Paris is the capital of France.", output=[])
+    )
+
+    history = [
+        Message(
+            id="1",
+            session_id="s1",
+            user_id="u1",
+            role="user",
+            content="What is the capital of France?",
+        ),
+    ]
+
+    reply = await service.generate_reply(
+        messages=history,
+        model="gpt-4.1-mini",
+        tool_service=SimpleNamespace(execute_tools=AsyncMock(return_value=[])),
+        available_tool_names=["web_search"],
+        tool_context=ToolContext(session_id="s1", user_id="u1"),
+    )
+
+    assert reply.assistant_text == "Paris is the capital of France."
+    assert mock_create.await_count == 1
+    assert mock_create.await_args.kwargs["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio
@@ -162,6 +195,7 @@ async def test_generate_reply_stream_emits_deltas_and_returns_final_text():
 
     assert reply.assistant_text == "Hello streaming world"
     assert reply.transcript_messages == []
+    assert reply.tool_results == []
     assert [(event.event, event.data) for event in events] == [
         ("delta", {"text": "Hello "}),
         ("delta", {"text": "streaming world"}),
@@ -231,9 +265,11 @@ async def test_generate_reply_stream_emits_tool_events_and_persists_transcript_m
     first_call_kwargs = mock_create.await_args_list[0].kwargs
     second_call_kwargs = mock_create.await_args_list[1].kwargs
     assert first_call_kwargs["tool_choice"] == "required"
-    assert second_call_kwargs["tool_choice"] == "required"
+    assert second_call_kwargs["tool_choice"] == "auto"
     assert reply.assistant_text == "Here is the streamed summary."
     assert len(reply.transcript_messages) == 2
+    assert len(reply.tool_results) == 1
+    assert reply.tool_results[0].content == "Search results"
     assert [(event.event, event.data) for event in events] == [
         (
             "tool_call",
@@ -253,3 +289,114 @@ async def test_generate_reply_stream_emits_tool_events_and_persists_transcript_m
         ),
         ("delta", {"text": "Here is the streamed summary."}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_stream_with_enabled_web_search_does_not_force_tool_for_non_current_prompt():
+    completed_response = SimpleNamespace(
+        output_text="Paris is the capital of France.",
+        output=[],
+    )
+    service, mock_create = build_service_with_mocked_responses(
+        FakeAsyncStream(
+            [
+                SimpleNamespace(type="response.output_text.delta", delta="Paris is the capital of France."),
+                SimpleNamespace(type="response.completed", response=completed_response),
+            ]
+        )
+    )
+
+    history = [
+        Message(
+            id="1",
+            session_id="s1",
+            user_id="u1",
+            role="user",
+            content="What is the capital of France?",
+        ),
+    ]
+
+    reply = await service.generate_reply_stream(
+        messages=history,
+        model="gpt-4.1-mini",
+        tool_service=SimpleNamespace(execute_tools=AsyncMock(return_value=[])),
+        available_tool_names=["web_search"],
+        tool_context=ToolContext(session_id="s1", user_id="u1"),
+    )
+
+    assert reply.assistant_text == "Paris is the capital of France."
+    assert mock_create.await_count == 1
+    assert mock_create.await_args.kwargs["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_emits_generated_artifact_when_requested():
+    web_search_service = SimpleNamespace(
+        search=AsyncMock(
+            return_value=(
+                "Web search provider: stub\nQuery: latest ai news\n\n1. Result title\nURL: https://example.com\nSnippet: Summary",
+                {
+                    "provider": "stub",
+                    "query": "latest ai news",
+                    "status": "ok",
+                    "result_count": 1,
+                },
+            )
+        )
+    )
+    tool = WebSearchTool(web_search_service)
+
+    result = await tool.execute(
+        query="latest ai news",
+        context=ToolContext(
+            session_id="s1",
+            user_id="u1",
+            metadata={"generate_search_artifact": True},
+        ),
+    )
+
+    assert result.tool_name == "web_search"
+    assert result.metadata["session_id"] == "s1"
+    assert result.metadata["user_id"] == "u1"
+    assert result.metadata["provider"] == "stub"
+    assert len(result.metadata["output_artifacts"]) == 1
+
+    artifact = result.metadata["output_artifacts"][0]
+    assert artifact["filename"] == "web-search-stub-results.md"
+    assert artifact["content_type"] == "text/markdown"
+    assert artifact["metadata"] == {
+        "label": "Web search results for: latest ai news",
+        "tool_name": "web_search",
+        "provider": "stub",
+        "query": "latest ai news",
+        "result_count": 1,
+        "status": "ok",
+    }
+    assert "# Web Search Results" in artifact["content"]
+    assert "latest ai news" in artifact["content"]
+    assert "```json" in artifact["content"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_does_not_emit_generated_artifact_by_default():
+    web_search_service = SimpleNamespace(
+        search=AsyncMock(
+            return_value=(
+                "Stubbed search results",
+                {
+                    "provider": "stub",
+                    "query": "latest ai news",
+                    "status": "ok",
+                    "result_count": 1,
+                },
+            )
+        )
+    )
+    tool = WebSearchTool(web_search_service)
+
+    result = await tool.execute(
+        query="latest ai news",
+        context=ToolContext(session_id="s1", user_id="u1"),
+    )
+
+    assert "output_artifacts" not in result.metadata

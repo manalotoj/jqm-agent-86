@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from "react";
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -8,17 +15,23 @@ import {
 } from "@azure/msal-react";
 import {
   Bot,
+  CheckCircle2,
+  Download,
+  FileUp,
   LoaderCircle,
   LogOut,
   MessageSquare,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   Plus,
   Send,
   Sparkles,
+  TriangleAlert,
   Trash2,
   User,
   WandSparkles,
+  X,
 } from "lucide-react";
 
 import { streamChat } from "@/api/chat";
@@ -50,6 +63,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { downloadArtifact } from "@/api/artifacts";
+import { useArtifacts, useUploadArtifact } from "@/hooks/useArtifacts";
 import { useMessages, messagesQueryKey } from "@/hooks/useMessages";
 import {
   useCreateSession,
@@ -58,6 +73,7 @@ import {
   useUpdateSession,
 } from "@/hooks/useSessions";
 import { cn } from "@/lib/utils";
+import type { Artifact } from "@/types/artifact";
 import type { Message } from "@/types/message";
 import type { Session } from "@/types/session";
 
@@ -69,6 +85,13 @@ const DEFAULT_CHAT_MODEL = "gpt-4.1-mini";
 const PREMIUM_CHAT_MODEL = "gpt-5.4";
 
 type ComposerModel = typeof DEFAULT_CHAT_MODEL | typeof PREMIUM_CHAT_MODEL;
+type NoticeTone = "success" | "error" | "info";
+
+type AppNotice = {
+  id: string;
+  message: string;
+  tone: NoticeTone;
+};
 
 const MODEL_OPTIONS: Array<{ label: string; value: ComposerModel; description: string }> = [
   {
@@ -145,7 +168,104 @@ function getAssistantTools(message: Message | null) {
   return Array.isArray(tools) ? tools.filter((tool): tool is string => typeof tool === "string") : [];
 }
 
-function createOptimisticUserMessage(sessionId: string, userId: string, content: string): Message {
+function getMessageArtifactIds(message: Message | null) {
+  const artifactIds = message?.metadata?.artifact_ids;
+
+  if (!Array.isArray(artifactIds)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(artifactIds.filter((artifactId): artifactId is string => typeof artifactId === "string" && Boolean(artifactId.trim()))),
+  );
+}
+
+function formatArtifactSize(sizeBytes: number) {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = sizeBytes / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function getToastStyles(tone: NoticeTone) {
+  switch (tone) {
+    case "success":
+      return {
+        container: "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-100",
+        icon: <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-300" />,
+      };
+    case "error":
+      return {
+        container: "border-destructive/30 bg-destructive/10 text-destructive",
+        icon: <TriangleAlert className="size-4" />,
+      };
+    default:
+      return {
+        container: "border-border bg-card text-foreground",
+        icon: <Paperclip className="size-4 text-muted-foreground" />,
+      };
+  }
+}
+
+function ToastViewport({
+  notices,
+  onDismiss,
+}: {
+  notices: AppNotice[];
+  onDismiss: (noticeId: string) => void;
+}) {
+  if (notices.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pointer-events-none fixed top-4 right-4 z-50 flex w-full max-w-sm flex-col gap-3 px-4 sm:px-0">
+      {notices.map((notice) => {
+        const styles = getToastStyles(notice.tone);
+
+        return (
+          <div
+            key={notice.id}
+            role="status"
+            aria-live="polite"
+            className={cn(
+              "pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-lg backdrop-blur-sm",
+              styles.container,
+            )}
+          >
+            <div className="mt-0.5 shrink-0">{styles.icon}</div>
+            <div className="min-w-0 flex-1 text-sm">{notice.message}</div>
+            <button
+              type="button"
+              onClick={() => onDismiss(notice.id)}
+              className="rounded-md p-1 text-current/70 transition-colors hover:bg-black/5 hover:text-current dark:hover:bg-white/10"
+            >
+              <X className="size-4" />
+              <span className="sr-only">Dismiss notification</span>
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function createOptimisticUserMessage(
+  sessionId: string,
+  userId: string,
+  content: string,
+  artifactIds: string[] = [],
+): Message {
   const timestamp = new Date().toISOString();
 
   return {
@@ -154,7 +274,7 @@ function createOptimisticUserMessage(sessionId: string, userId: string, content:
     user_id: userId,
     role: "user",
     content,
-    metadata: {},
+    metadata: artifactIds.length > 0 ? { artifact_ids: artifactIds } : {},
     created_at: timestamp,
   };
 }
@@ -253,10 +373,24 @@ function SessionSidebarItem({
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  attachedArtifacts,
+  onDownloadArtifact,
+  downloadingArtifactId,
+}: {
+  message: Message;
+  attachedArtifacts: Artifact[];
+  onDownloadArtifact: (artifact: Artifact) => void;
+  downloadingArtifactId: string | null;
+}) {
   const isUser = message.role === "user";
   const model = getAssistantModel(message);
   const tools = getAssistantTools(message);
+  const artifactIds = getMessageArtifactIds(message);
+  const resolvedArtifacts = artifactIds
+    .map((artifactId) => attachedArtifacts.find((artifact) => artifact.id === artifactId) ?? null)
+    .filter((artifact): artifact is Artifact => artifact !== null);
 
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
@@ -293,6 +427,38 @@ function MessageBubble({ message }: { message: Message }) {
           <p className={cn("mt-2 whitespace-pre-wrap text-sm leading-6", isUser && "text-primary-foreground")}>
             {message.content || "…"}
           </p>
+          {isUser && resolvedArtifacts.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {resolvedArtifacts.map((artifact) => {
+                const isDownloading = downloadingArtifactId === artifact.id;
+
+                return (
+                  <button
+                    key={artifact.id}
+                    type="button"
+                    onClick={() => onDownloadArtifact(artifact)}
+                    disabled={isDownloading}
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] transition-colors",
+                      isUser
+                        ? "border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/15"
+                        : "bg-muted/60 text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {isDownloading ? (
+                      <LoaderCircle className="size-3 animate-spin" />
+                    ) : (
+                      <Paperclip className="size-3" />
+                    )}
+                    <span>{artifact.filename}</span>
+                    <span className="rounded-full bg-black/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-current/80 dark:bg-white/10">
+                      {formatArtifactSize(artifact.size_bytes)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           {!isUser && tools.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {tools.map((tool) => (
@@ -329,7 +495,9 @@ function EmptyConversationState() {
 function AuthenticatedApp() {
   const { instance, accounts } = useMsal();
   const activeAccount = accounts[0];
-  const activeUserId = String(activeAccount?.idTokenClaims?.oid ?? activeAccount?.localAccountId ?? "current-user");
+  const activeUserId = String(
+    activeAccount?.idTokenClaims?.oid ?? activeAccount?.localAccountId ?? "current-user",
+  );
   const queryClient = useQueryClient();
 
   const { data: sessions = [], isLoading, error } = useSessions();
@@ -362,17 +530,68 @@ function AuthenticatedApp() {
     isLoading: isMessagesLoading,
     isFetching: isMessagesFetching,
   } = useMessages(selectedSession?.id ?? null);
+  const {
+    data: artifacts = [],
+    isLoading: isArtifactsLoading,
+    error: artifactsError,
+  } = useArtifacts(selectedSession?.id ?? null);
+  const uploadArtifact = useUploadArtifact(selectedSession?.id ?? null);
 
   const lastAssistantMessage = useMemo(() => {
     const assistantMessages = messages.filter((message) => message.role === "assistant");
     return assistantMessages.at(-1) ?? null;
   }, [messages]);
+  const artifactMap = useMemo(
+    () => new Map(artifacts.map((artifact) => [artifact.id, artifact] as const)),
+    [artifacts],
+  );
 
   useEffect(() => {
     setChatError(null);
     setStreamingStatus(null);
     setLastStreamModel(null);
   }, [selectedSession?.id]);
+
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
+  const [artifactActionError, setArtifactActionError] = useState<string | null>(null);
+  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
+  const [notices, setNotices] = useState<AppNotice[]>([]);
+  const [isArtifactDragActive, setIsArtifactDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const dismissNotice = (noticeId: string) => {
+    setNotices((current) => current.filter((notice) => notice.id !== noticeId));
+  };
+
+  const addNotice = (message: string, tone: NoticeTone = "info") => {
+    const noticeId = crypto.randomUUID();
+
+    setNotices((current) => [...current.slice(-2), { id: noticeId, message, tone }]);
+  };
+
+  useEffect(() => {
+    setSelectedArtifactIds((current) => current.filter((artifactId) => artifactMap.has(artifactId)));
+  }, [artifactMap]);
+
+  useEffect(() => {
+    setArtifactActionError(null);
+  }, [selectedSession?.id]);
+
+  useEffect(() => {
+    if (notices.length === 0) {
+      return;
+    }
+
+    const timeoutIds = notices.map((notice) =>
+      window.setTimeout(() => {
+        setNotices((current) => current.filter((item) => item.id !== notice.id));
+      }, 4000),
+    );
+
+    return () => {
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    };
+  }, [notices]);
 
   useEffect(() => {
     const viewport = scrollViewportRef.current;
@@ -430,12 +649,132 @@ function AuthenticatedApp() {
     });
   };
 
+  const handleToggleArtifactSelection = (artifactId: string) => {
+    setSelectedArtifactIds((current) =>
+      current.includes(artifactId)
+        ? current.filter((currentArtifactId) => currentArtifactId !== artifactId)
+        : [...current, artifactId],
+    );
+
+    const artifact = artifactMap.get(artifactId);
+
+    if (artifact) {
+      addNotice(
+        selectedArtifactIds.includes(artifactId)
+          ? `${artifact.filename} removed from the next message.`
+          : `${artifact.filename} attached to the next message.`,
+        "info",
+      );
+    }
+  };
+
+  const uploadSelectedFile = async (file: File) => {
+    if (!selectedSession) {
+      return;
+    }
+
+    setArtifactActionError(null);
+
+    try {
+      const artifact = await uploadArtifact.mutateAsync({ file });
+      setSelectedArtifactIds((current) =>
+        current.includes(artifact.id) ? current : [...current, artifact.id],
+      );
+      addNotice(`${artifact.filename} uploaded and attached to the next message.`, "success");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to upload the selected artifact.";
+      setArtifactActionError(message);
+      addNotice(message, "error");
+    }
+  };
+
+  const handleUploadArtifact = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!selectedSession || !file) {
+      return;
+    }
+
+    try {
+      await uploadSelectedFile(file);
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const handleArtifactDragState = (event: DragEvent<HTMLDivElement>, nextState: boolean) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!selectedSession || uploadArtifact.isPending) {
+      return;
+    }
+
+    setIsArtifactDragActive(nextState);
+  };
+
+  const handleArtifactDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsArtifactDragActive(false);
+
+    if (!selectedSession || uploadArtifact.isPending) {
+      return;
+    }
+
+    const file = event.dataTransfer.files?.[0];
+
+    if (!file) {
+      addNotice("Drop a file to upload it to this session.", "info");
+      return;
+    }
+
+    await uploadSelectedFile(file);
+  };
+
+  const handleDownloadArtifact = async (artifact: Artifact) => {
+    if (!selectedSession || !activeAccount) {
+      return;
+    }
+
+    setArtifactActionError(null);
+    setDownloadingArtifactId(artifact.id);
+
+    try {
+      const result = await downloadArtifact(
+        instance,
+        activeAccount,
+        selectedSession.id,
+        artifact.id,
+        artifact.filename,
+      );
+      const objectUrl = URL.createObjectURL(result.blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = result.filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      addNotice(`${result.filename} download started.`, "success");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to download the selected artifact.";
+      setArtifactActionError(message);
+      addNotice(message, "error");
+    } finally {
+      setDownloadingArtifactId(null);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!selectedSession || !activeAccount) {
       return;
     }
 
     const content = draftMessage.trim();
+    const artifactIds = selectedArtifactIds.filter((artifactId) => artifactMap.has(artifactId));
 
     if (!content) {
       return;
@@ -445,12 +784,14 @@ function AuthenticatedApp() {
     const requestMetadata = {
       enable_web_search: webSearchEnabled,
       model: selectedModel,
+      ...(artifactIds.length > 0 ? { artifact_ids: artifactIds } : {}),
     };
 
     const optimisticUserMessage = createOptimisticUserMessage(
       requestSessionId,
       activeUserId,
       content,
+      artifactIds,
     );
     const optimisticAssistantMessage = createOptimisticAssistantMessage(
       requestSessionId,
@@ -466,6 +807,7 @@ function AuthenticatedApp() {
     setStreamingStatus("Starting response…");
     setLastStreamModel(null);
     setDraftMessage("");
+    setSelectedArtifactIds([]);
 
     queryClient.setQueryData<Message[]>(queryKey, (existing = []) => [
       ...existing,
@@ -584,10 +926,15 @@ function AuthenticatedApp() {
     }
   };
 
-  const canSendMessage = Boolean(selectedSession && activeAccount && draftMessage.trim()) && !isMessagesFetching;
+  const canSendMessage =
+    Boolean(selectedSession && activeAccount && draftMessage.trim()) &&
+    !isMessagesFetching &&
+    !uploadArtifact.isPending;
 
   return (
-    <div className="flex min-h-svh bg-background text-foreground">
+    <>
+      <ToastViewport notices={notices} onDismiss={dismissNotice} />
+      <div className="flex min-h-svh bg-background text-foreground">
       <aside className="flex w-full max-w-sm flex-col border-r bg-sidebar text-sidebar-foreground lg:w-96">
         <div className="flex items-center gap-3 border-b px-4 py-4">
           <div className="flex size-10 items-center justify-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-sm">
@@ -795,13 +1142,27 @@ function AuthenticatedApp() {
               ) : (
                 <div className="space-y-4">
                   {messages.map((message) => (
-                    <MessageBubble key={message.id} message={message} />
+                    <MessageBubble
+                      key={message.id}
+                      message={message}
+                      attachedArtifacts={artifacts}
+                      onDownloadArtifact={(artifact) => {
+                        void handleDownloadArtifact(artifact);
+                      }}
+                      downloadingArtifactId={downloadingArtifactId}
+                    />
                   ))}
                 </div>
               )}
             </div>
 
             <div className="border-t px-6 py-5">
+              {artifactActionError ? (
+                <div className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                  {artifactActionError}
+                </div>
+              ) : null}
+
               {chatError ? (
                 <div className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                   {chatError}
@@ -815,7 +1176,27 @@ function AuthenticatedApp() {
                 </div>
               ) : null}
 
-              <div className="rounded-2xl border bg-background p-3 shadow-xs">
+              <div
+                className={cn(
+                  "rounded-2xl border bg-background p-3 shadow-xs transition-colors",
+                  isArtifactDragActive && "border-primary bg-primary/5 ring-2 ring-primary/20",
+                )}
+                onDragEnter={(event) => handleArtifactDragState(event, true)}
+                onDragOver={(event) => handleArtifactDragState(event, true)}
+                onDragLeave={(event) => handleArtifactDragState(event, false)}
+                onDrop={(event) => {
+                  void handleArtifactDrop(event);
+                }}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleUploadArtifact(event);
+                  }}
+                />
+
                 <textarea
                   value={draftMessage}
                   onChange={(event) => setDraftMessage(event.target.value)}
@@ -835,13 +1216,73 @@ function AuthenticatedApp() {
                   }}
                 />
 
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>
+                    Drag and drop a file here, or use upload to add a session artifact.
+                  </span>
+                  {isArtifactDragActive ? (
+                    <span className="rounded-full bg-primary/10 px-2.5 py-1 font-medium text-primary">
+                      Release to upload
+                    </span>
+                  ) : null}
+                </div>
+
+                {selectedArtifactIds.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedArtifactIds.map((artifactId) => {
+                      const artifact = artifactMap.get(artifactId);
+
+                      if (!artifact) {
+                        return null;
+                      }
+
+                      return (
+                        <button
+                          key={artifact.id}
+                          type="button"
+                          onClick={() => handleToggleArtifactSelection(artifact.id)}
+                          className="inline-flex items-center gap-2 rounded-full border bg-muted px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/80"
+                        >
+                          <Paperclip className="size-3" />
+                          <span>{artifact.filename}</span>
+                          <span className="rounded-full bg-background px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {formatArtifactSize(artifact.size_bytes)}
+                          </span>
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                            Attached
+                          </span>
+                          <span aria-hidden="true">×</span>
+                          <span className="sr-only">Remove attachment</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={!selectedSession || uploadArtifact.isPending}
+                    >
+                      {uploadArtifact.isPending ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <FileUp className="size-4" />
+                      )}
+                      Upload artifact
+                    </Button>
                     <span className="rounded-full bg-muted px-2.5 py-1">
                       Model: {selectedModel}
                     </span>
                     <span className="rounded-full bg-muted px-2.5 py-1">
                       Web search: {webSearchEnabled ? "enabled" : "disabled"}
+                    </span>
+                    <span className="rounded-full bg-muted px-2.5 py-1">
+                      Attachments: {selectedArtifactIds.length}
                     </span>
                   </div>
 
@@ -935,12 +1376,111 @@ function AuthenticatedApp() {
                     </div>
                     <div className="rounded-xl border bg-muted/40 p-4">
                       <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                        Last model
+                        Artifacts
                       </p>
-                      <p className="mt-2 text-sm font-medium">
-                        {getAssistantModel(lastAssistantMessage) ?? lastStreamModel ?? selectedModel}
-                      </p>
+                      <p className="mt-2 text-2xl font-semibold">{artifacts.length}</p>
                     </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-muted/30 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                          Session artifacts
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Upload, attach, or download files scoped to this session.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadArtifact.isPending}
+                      >
+                        {uploadArtifact.isPending ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <FileUp className="size-4" />
+                        )}
+                        Upload
+                      </Button>
+                    </div>
+
+                    {isArtifactsLoading ? (
+                      <div className="mt-4 space-y-2">
+                        {Array.from({ length: 3 }).map((_, index) => (
+                          <Skeleton key={index} className="h-12 w-full rounded-xl" />
+                        ))}
+                      </div>
+                    ) : artifactsError ? (
+                      <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                        {(artifactsError as Error).message || "Failed to load artifacts."}
+                      </div>
+                    ) : artifacts.length > 0 ? (
+                      <div className="mt-4 space-y-2">
+                        {artifacts.map((artifact) => {
+                          const isSelected = selectedArtifactIds.includes(artifact.id);
+                          const isDownloading = downloadingArtifactId === artifact.id;
+
+                          return (
+                            <div
+                              key={artifact.id}
+                              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background px-3 py-3"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleToggleArtifactSelection(artifact.id)}
+                                className="min-w-0 flex-1 text-left"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Paperclip className="size-4 text-muted-foreground" />
+                                  <p className="truncate text-sm font-medium">{artifact.filename}</p>
+                                  {isSelected ? (
+                                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                                      Attached
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {artifact.content_type} • {formatArtifactSize(artifact.size_bytes)}
+                                </p>
+                              </button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  void handleDownloadArtifact(artifact);
+                                }}
+                                disabled={isDownloading}
+                              >
+                                {isDownloading ? (
+                                  <LoaderCircle className="size-4 animate-spin" />
+                                ) : (
+                                  <Download className="size-4" />
+                                )}
+                                Download
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                        No artifacts uploaded for this session yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border bg-muted/40 p-4">
+                    <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                      Last model
+                    </p>
+                    <p className="mt-2 text-sm font-medium">
+                      {getAssistantModel(lastAssistantMessage) ?? lastStreamModel ?? selectedModel}
+                    </p>
                   </div>
 
                   <div className="rounded-xl border bg-muted/30 p-4">
@@ -1006,7 +1546,8 @@ function AuthenticatedApp() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+      </div>
+    </>
   );
 }
 

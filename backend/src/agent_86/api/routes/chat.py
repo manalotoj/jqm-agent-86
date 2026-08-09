@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -36,27 +38,6 @@ def is_web_search_enabled(metadata: dict | None) -> bool:
     return bool(metadata.get("enable_web_search", False))
 
 
-def should_use_web_search(content: str) -> bool:
-    text = content.lower()
-
-    web_search_signals = [
-        "current",
-        "latest",
-        "today",
-        "news",
-        "recent",
-        "right now",
-        "check internet",
-        "on the internet",
-        "online",
-        "stock price",
-        "weather",
-        "score",
-    ]
-
-    return any(signal in text for signal in web_search_signals)
-
-
 def to_response(message: Message) -> MessageResponse:
     return MessageResponse(
         id=message.id,
@@ -85,10 +66,18 @@ async def ensure_session_exists(
 def choose_tool_names(content: str, metadata: dict | None) -> list[str]:
     tool_names: list[str] = []
 
-    if is_web_search_enabled(metadata) and should_use_web_search(content):
+    if is_web_search_enabled(metadata):
         tool_names.append("web_search")
 
     return tool_names
+
+
+def build_tool_context(*, session_id: str, user_id: str, request_metadata: dict | None) -> ToolContext:
+    return ToolContext(
+        session_id=session_id,
+        user_id=user_id,
+        metadata=dict(request_metadata or {}),
+    )
 
 
 def build_assistant_metadata(selected_model: str, tool_names: list[str]) -> dict:
@@ -97,6 +86,98 @@ def build_assistant_metadata(selected_model: str, tool_names: list[str]) -> dict
         "model": selected_model,
         "tools": tool_names,
     }
+
+
+def _normalize_output_artifact_spec(spec: Any) -> dict[str, Any] | None:
+    if not isinstance(spec, dict):
+        return None
+
+    filename = str(spec.get("filename", "")).strip()
+    content_type = str(spec.get("content_type", "")).strip()
+    content_value = spec.get("content")
+
+    if not filename or not content_type or not isinstance(content_value, str):
+        return None
+
+    source_artifact_ids = spec.get("source_artifact_ids", [])
+    if not isinstance(source_artifact_ids, list) or not all(
+        isinstance(artifact_id, str) and artifact_id.strip()
+        for artifact_id in source_artifact_ids
+    ):
+        return None
+
+    metadata = spec.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+
+    encoding = str(spec.get("content_encoding", "utf-8")).strip().lower()
+    if encoding not in {"utf-8", "base64"}:
+        return None
+
+    return {
+        "filename": filename,
+        "content_type": content_type,
+        "content": content_value,
+        "content_encoding": encoding,
+        "source_artifact_ids": source_artifact_ids,
+        "metadata": metadata,
+    }
+
+
+def _decode_output_artifact_content(spec: dict[str, Any]) -> bytes:
+    if spec["content_encoding"] == "base64":
+        return base64.b64decode(spec["content"], validate=True)
+
+    return spec["content"].encode("utf-8")
+
+
+async def persist_generated_artifacts_from_tool_results(
+    *,
+    user_id: str,
+    session_id: str,
+    reply: ChatModelReply,
+    assistant_message: Message,
+    artifact_service: ArtifactService,
+    message_service: MessageService,
+) -> list[dict[str, Any]]:
+    persisted_artifacts: list[dict[str, Any]] = []
+
+    for tool_result in reply.tool_results:
+        output_artifacts = tool_result.metadata.get("output_artifacts", [])
+        if not isinstance(output_artifacts, list):
+            continue
+
+        for artifact_spec in output_artifacts:
+            normalized_spec = _normalize_output_artifact_spec(artifact_spec)
+            if normalized_spec is None:
+                continue
+
+            try:
+                artifact = await artifact_service.create_generated_artifact(
+                    session_id=session_id,
+                    user_id=user_id,
+                    filename=normalized_spec["filename"],
+                    content_type=normalized_spec["content_type"],
+                    content=_decode_output_artifact_content(normalized_spec),
+                    source_artifact_ids=normalized_spec["source_artifact_ids"],
+                    generated_by_message_id=assistant_message.id,
+                    metadata=normalized_spec["metadata"],
+                    message_service=message_service,
+                )
+            except (ArtifactNotFoundError, ValueError):
+                continue
+
+            persisted_artifacts.append(
+                {
+                    "id": artifact.id,
+                    "filename": artifact.filename,
+                    "content_type": artifact.content_type,
+                    "size_bytes": artifact.size_bytes,
+                    "metadata": artifact.metadata,
+                }
+            )
+
+    return persisted_artifacts
 
 
 async def validate_and_enrich_request_metadata(
@@ -166,6 +247,7 @@ async def persist_assistant_message(
     selected_model: str,
     tool_names: list[str],
     message_service: MessageService,
+    artifact_service: ArtifactService,
 ) -> Message:
     await persist_transcript_messages(
         user_id=user_id,
@@ -174,7 +256,7 @@ async def persist_assistant_message(
         message_service=message_service,
     )
 
-    return await message_service.create_message(
+    assistant_message = await message_service.create_message(
         session_id=session_id,
         user_id=user_id,
         request=CreateMessageRequest(
@@ -183,6 +265,31 @@ async def persist_assistant_message(
             metadata=build_assistant_metadata(selected_model, tool_names),
         ),
     )
+
+    generated_artifacts = await persist_generated_artifacts_from_tool_results(
+        user_id=user_id,
+        session_id=session_id,
+        reply=reply,
+        assistant_message=assistant_message,
+        artifact_service=artifact_service,
+        message_service=message_service,
+    )
+
+    if not generated_artifacts:
+        return assistant_message
+
+    assistant_message.metadata = {
+        **assistant_message.metadata,
+        "generated_artifacts": generated_artifacts,
+    }
+
+    persisted_assistant_message = await message_service.update_message_metadata(
+        user_id=user_id,
+        session_id=session_id,
+        message_id=assistant_message.id,
+        metadata=assistant_message.metadata,
+    )
+    return persisted_assistant_message or assistant_message
 
 
 async def prepare_chat_context(
@@ -254,7 +361,11 @@ async def chat(
         model=selected_model,
         tool_service=tool_service,
         available_tool_names=tool_names,
-        tool_context=ToolContext(session_id=session_id, user_id=user.user_id),
+        tool_context=build_tool_context(
+            session_id=session_id,
+            user_id=user.user_id,
+            request_metadata=request.metadata,
+        ),
     )
 
     assistant_message = await persist_assistant_message(
@@ -264,6 +375,7 @@ async def chat(
         selected_model=selected_model,
         tool_names=tool_names,
         message_service=message_service,
+        artifact_service=artifact_service,
     )
 
     return ChatResponse(message=to_response(assistant_message))
@@ -317,7 +429,11 @@ async def chat_stream(
                     model=selected_model,
                     tool_service=tool_service,
                     available_tool_names=tool_names,
-                    tool_context=ToolContext(session_id=session_id, user_id=user.user_id),
+                    tool_context=build_tool_context(
+                        session_id=session_id,
+                        user_id=user.user_id,
+                        request_metadata=request.metadata,
+                    ),
                     event_callback=on_chat_event,
                 )
 
@@ -328,6 +444,7 @@ async def chat_stream(
                     selected_model=selected_model,
                     tool_names=tool_names,
                     message_service=message_service,
+                    artifact_service=artifact_service,
                 )
 
                 await queue.put(

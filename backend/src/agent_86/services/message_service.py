@@ -26,6 +26,29 @@ class MessageService:
     ) -> list[Message]:
         return await self._repository.list_messages(user_id, session_id)
 
+    async def get_message(
+        self,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+    ) -> Message | None:
+        return await self._repository.get_message(user_id, session_id, message_id)
+
+    async def update_message_metadata(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+        metadata: dict,
+    ) -> Message | None:
+        return await self._repository.update_message_metadata(
+            user_id=user_id,
+            session_id=session_id,
+            message_id=message_id,
+            metadata=metadata,
+        )
+
     async def delete_messages_for_session(
         self,
         user_id: str,

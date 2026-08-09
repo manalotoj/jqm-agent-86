@@ -1,3 +1,4 @@
+import base64
 import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from agent_86.api.dependencies import (
     get_session_service,
     get_tool_service,
 )
+from agent_86.api.routes.chat import choose_tool_names
 from agent_86.auth.dependencies import get_token_validator
 from agent_86.auth.provider import TokenValidationError
 from agent_86.core.config import get_settings
@@ -98,6 +100,29 @@ class InMemoryMessageRepository:
             ],
             key=lambda message: message.created_at or datetime.min.replace(tzinfo=UTC),
         )
+
+    async def get_message(self, user_id: str, session_id: str, message_id: str) -> Message | None:
+        message = self._messages.get(message_id)
+        if message is None:
+            return None
+        if message.user_id != user_id or message.session_id != session_id:
+            return None
+        return message
+
+    async def update_message_metadata(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+        metadata: dict,
+    ) -> Message | None:
+        message = await self.get_message(user_id, session_id, message_id)
+        if message is None:
+            return None
+
+        message.metadata = metadata
+        return message
 
     async def delete_messages_for_session(self, user_id: str, session_id: str) -> None:
         to_delete = [
@@ -428,6 +453,21 @@ def test_chat_route_passes_authenticated_user_into_tool_context(api_client):
     assert isinstance(tool_context, ToolContext)
     assert tool_context.user_id == "user-1"
     assert tool_context.session_id == session["id"]
+    assert tool_context.metadata == {"enable_web_search": False}
+
+
+def test_choose_tool_names_includes_web_search_when_toggle_enabled_for_non_current_prompt():
+    assert choose_tool_names(
+        "What is the capital of France?",
+        {"enable_web_search": True},
+    ) == ["web_search"]
+
+
+def test_choose_tool_names_excludes_web_search_when_toggle_disabled():
+    assert choose_tool_names(
+        "What is the latest AI news?",
+        {"enable_web_search": False},
+    ) == []
 
 
 def test_artifact_routes_and_chat_attachment_metadata_enforce_ownership(api_client):
@@ -502,6 +542,173 @@ def test_artifact_routes_and_chat_attachment_metadata_enforce_ownership(api_clie
     assert persisted_messages.status_code == 200
     user_messages = [message for message in persisted_messages.json() if message["role"] == "user"]
     assert user_messages[-1]["metadata"] == {"artifact_ids": [artifact["id"]]}
+
+
+def test_generated_artifact_route_persists_lineage_and_enforces_source_ownership(api_client):
+    client, _, _, _, _ = api_client
+
+    owned_session = create_session_for(client, "valid-user-1", title="Owned")
+    other_session = create_session_for(client, "valid-user-2", title="Other")
+
+    upload_response = client.post(
+        f"/sessions/{owned_session['id']}/artifacts/upload",
+        headers=auth_header("valid-user-1"),
+        files={"file": ("notes.txt", b"hello artifact", "text/plain")},
+        data={"metadata": '{"label": "primary"}'},
+    )
+    assert upload_response.status_code == 201, upload_response.text
+    source_artifact = upload_response.json()
+
+    message_response = client.post(
+        f"/sessions/{owned_session['id']}/messages",
+        headers=auth_header("valid-user-1"),
+        json={"role": "assistant", "content": "Created a revision", "metadata": {}},
+    )
+    assert message_response.status_code == 201, message_response.text
+    assistant_message = message_response.json()
+
+    generated_content = b"revised artifact"
+    create_generated_response = client.post(
+        f"/sessions/{owned_session['id']}/artifacts/generated",
+        headers=auth_header("valid-user-1"),
+        json={
+            "filename": "notes-revised.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(generated_content).decode("ascii"),
+            "source_artifact_ids": [source_artifact["id"], source_artifact["id"]],
+            "generated_by_message_id": assistant_message["id"],
+            "metadata": {"label": "revised"},
+        },
+    )
+
+    assert create_generated_response.status_code == 201, create_generated_response.text
+    generated_artifact = create_generated_response.json()
+    assert generated_artifact["filename"] == "notes-revised.txt"
+    assert generated_artifact["metadata"] == {
+        "label": "revised",
+        "artifact_kind": "generated",
+        "source_artifact_ids": [source_artifact["id"]],
+        "generated_by_message_id": assistant_message["id"],
+    }
+
+    list_response = client.get(
+        f"/sessions/{owned_session['id']}/artifacts",
+        headers=auth_header("valid-user-1"),
+    )
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == [source_artifact["id"], generated_artifact["id"]]
+
+    download_response = client.get(
+        f"/sessions/{owned_session['id']}/artifacts/{generated_artifact['id']}/download",
+        headers=auth_header("valid-user-1"),
+    )
+    assert download_response.status_code == 200
+    assert download_response.content == generated_content
+
+    wrong_session_response = client.post(
+        f"/sessions/{other_session['id']}/artifacts/generated",
+        headers=auth_header("valid-user-2"),
+        json={
+            "filename": "unauthorized.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(b"should fail").decode("ascii"),
+            "source_artifact_ids": [source_artifact["id"]],
+            "metadata": {},
+        },
+    )
+
+    assert wrong_session_response.status_code == 404
+
+    bad_message_response = client.post(
+        f"/sessions/{owned_session['id']}/artifacts/generated",
+        headers=auth_header("valid-user-1"),
+        json={
+            "filename": "bad-message.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(b"bad message lineage").decode("ascii"),
+            "source_artifact_ids": [source_artifact["id"]],
+            "generated_by_message_id": "missing-message",
+            "metadata": {},
+        },
+    )
+
+    assert bad_message_response.status_code == 404
+
+
+def test_chat_route_persists_generated_artifacts_from_tool_results(api_client):
+    client, _, _, _, chat_model_service = api_client
+
+    session = create_session_for(client, "valid-user-1", title="Generated outputs")
+    source_upload_response = client.post(
+        f"/sessions/{session['id']}/artifacts/upload",
+        headers=auth_header("valid-user-1"),
+        files={"file": ("source.txt", b"seed artifact", "text/plain")},
+        data={"metadata": '{"label": "seed"}'},
+    )
+    assert source_upload_response.status_code == 201, source_upload_response.text
+    source_artifact = source_upload_response.json()
+
+    chat_model_service.generate_reply.return_value = ChatModelReply(
+        assistant_text="I created a derived file.",
+        transcript_messages=[],
+        tool_results=[
+            SimpleNamespace(
+                tool_name="echo",
+                content="done",
+                metadata={
+                    "output_artifacts": [
+                        {
+                            "filename": "derived.txt",
+                            "content_type": "text/plain",
+                            "content": "derived body",
+                            "source_artifact_ids": [source_artifact["id"]],
+                            "metadata": {"label": "derived"},
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+
+    response = client.post(
+        f"/sessions/{session['id']}/chat",
+        headers=auth_header("valid-user-1"),
+        json={
+            "content": "Please produce a derived file",
+            "metadata": {},
+            "tools": [],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assistant_message = response.json()["message"]
+    generated_artifacts = assistant_message["metadata"]["generated_artifacts"]
+    assert len(generated_artifacts) == 1
+    generated_artifact = generated_artifacts[0]
+    assert generated_artifact["filename"] == "derived.txt"
+    assert generated_artifact["content_type"] == "text/plain"
+    assert generated_artifact["metadata"] == {
+        "label": "derived",
+        "artifact_kind": "generated",
+        "source_artifact_ids": [source_artifact["id"]],
+        "generated_by_message_id": assistant_message["id"],
+    }
+
+    artifacts_response = client.get(
+        f"/sessions/{session['id']}/artifacts",
+        headers=auth_header("valid-user-1"),
+    )
+    assert artifacts_response.status_code == 200, artifacts_response.text
+    artifacts = artifacts_response.json()
+    assert [artifact["filename"] for artifact in artifacts] == ["source.txt", "derived.txt"]
+
+    persisted_messages_response = client.get(
+        f"/sessions/{session['id']}/messages",
+        headers=auth_header("valid-user-1"),
+    )
+    assert persisted_messages_response.status_code == 200, persisted_messages_response.text
+    persisted_assistant_message = persisted_messages_response.json()[-1]
+    assert persisted_assistant_message["metadata"] == assistant_message["metadata"]
 
 
 def test_startup_fails_with_concise_error_when_auth_configuration_is_missing(

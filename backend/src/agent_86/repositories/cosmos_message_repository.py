@@ -32,6 +32,33 @@ class CosmosMessageRepository:
 
         return self._from_document(created)
 
+    async def get_message(
+        self,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+    ) -> Message | None:
+        query = """
+        SELECT *
+        FROM c
+        WHERE c.id = @message_id AND c.session_id = @session_id AND c.user_id = @user_id
+        """
+
+        parameters = [
+            {"name": "@message_id", "value": message_id},
+            {"name": "@session_id", "value": session_id},
+            {"name": "@user_id", "value": user_id},
+        ]
+
+        async for item in self._container.query_items(
+            query=query,
+            parameters=parameters,
+            partition_key=session_id,
+        ):
+            return self._from_document(item)
+
+        return None
+
     async def list_messages(
         self,
         user_id: str,
@@ -59,6 +86,26 @@ class CosmosMessageRepository:
             messages.append(self._from_document(item))
 
         return messages
+
+    async def update_message_metadata(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+        metadata: dict,
+    ) -> Message | None:
+        message = await self.get_message(
+            user_id=user_id,
+            session_id=session_id,
+            message_id=message_id,
+        )
+        if message is None:
+            return None
+
+        message.metadata = metadata
+        updated = await self._container.upsert_item(self._to_document(message))
+        return self._from_document(updated)
 
     async def delete_messages_for_session(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from uuid import uuid4
 
@@ -162,6 +163,128 @@ def test_chat_stream_accepts_artifact_ids_and_persists_user_message_metadata(
     assert user_messages
     assert user_messages[-1]["content"] == prompt
     assert user_messages[-1]["metadata"] == {"artifact_ids": [artifact["id"]]}
+
+
+@pytest.mark.e2e
+def test_generated_artifact_create_list_get_and_download_with_lineage(
+    e2e_authenticated_client,
+    e2e_http_client: httpx.Client,
+    session_factory,
+) -> None:
+    created_session = session_factory(
+        title=_unique_label("e2e-generated-artifacts-session"),
+        metadata={"case": "generated-artifacts", "nonce": _unique_label("generated-artifacts")},
+    )
+    source_artifact = _upload_artifact(
+        session_id=created_session["id"],
+        e2e_authenticated_client=e2e_authenticated_client,
+        e2e_http_client=e2e_http_client,
+        filename="source.txt",
+        content=b"source artifact",
+        metadata={"label": "source"},
+    )
+
+    message_response = e2e_http_client.post(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/messages",
+        headers=e2e_authenticated_client.authorization_header,
+        json={"role": "assistant", "content": "Generated a revision", "metadata": {}},
+    )
+    assert message_response.status_code == 201, message_response.text
+    assistant_message = message_response.json()
+
+    generated_content = b"generated artifact body"
+    create_response = e2e_http_client.post(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/artifacts/generated",
+        headers=e2e_authenticated_client.authorization_header,
+        json={
+            "filename": "source-revised.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(generated_content).decode("ascii"),
+            "source_artifact_ids": [source_artifact["id"], source_artifact["id"]],
+            "generated_by_message_id": assistant_message["id"],
+            "metadata": {"label": "generated"},
+        },
+    )
+    assert create_response.status_code == 201, create_response.text
+    generated_artifact = create_response.json()
+    assert generated_artifact["session_id"] == created_session["id"]
+    assert generated_artifact["filename"] == "source-revised.txt"
+    assert generated_artifact["content_type"] == "text/plain"
+    assert generated_artifact["size_bytes"] == len(generated_content)
+    assert generated_artifact["metadata"] == {
+        "label": "generated",
+        "artifact_kind": "generated",
+        "source_artifact_ids": [source_artifact["id"]],
+        "generated_by_message_id": assistant_message["id"],
+    }
+
+    list_response = e2e_http_client.get(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/artifacts",
+        headers=e2e_authenticated_client.authorization_header,
+    )
+    assert list_response.status_code == 200, list_response.text
+    listed = list_response.json()
+    assert [item["id"] for item in listed] == [source_artifact["id"], generated_artifact["id"]]
+
+    get_response = e2e_http_client.get(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/artifacts/{generated_artifact['id']}",
+        headers=e2e_authenticated_client.authorization_header,
+    )
+    assert get_response.status_code == 200, get_response.text
+    assert get_response.json()["metadata"] == generated_artifact["metadata"]
+
+    download_response = e2e_http_client.get(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/artifacts/{generated_artifact['id']}/download",
+        headers=e2e_authenticated_client.authorization_header,
+    )
+    assert download_response.status_code == 200, download_response.text
+    assert download_response.content == generated_content
+    assert download_response.headers["content-type"].startswith("text/plain")
+
+    missing_message_response = e2e_http_client.post(
+        f"{e2e_authenticated_client.base_url}/sessions/{created_session['id']}/artifacts/generated",
+        headers=e2e_authenticated_client.authorization_header,
+        json={
+            "filename": "missing-message.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(b"invalid lineage").decode("ascii"),
+            "source_artifact_ids": [source_artifact["id"]],
+            "generated_by_message_id": "missing-message",
+            "metadata": {},
+        },
+    )
+    assert missing_message_response.status_code == 404, missing_message_response.text
+
+
+@pytest.mark.e2e
+def test_generated_artifact_rejects_source_from_wrong_session(
+    e2e_authenticated_client,
+    e2e_http_client: httpx.Client,
+    session_factory,
+) -> None:
+    first_session = session_factory(title=_unique_label("e2e-generated-owning-session"))
+    second_session = session_factory(title=_unique_label("e2e-generated-other-session"))
+    source_artifact = _upload_artifact(
+        session_id=first_session["id"],
+        e2e_authenticated_client=e2e_authenticated_client,
+        e2e_http_client=e2e_http_client,
+        filename="wrong-session-source.txt",
+        content=b"session scoped",
+    )
+
+    create_response = e2e_http_client.post(
+        f"{e2e_authenticated_client.base_url}/sessions/{second_session['id']}/artifacts/generated",
+        headers=e2e_authenticated_client.authorization_header,
+        json={
+            "filename": "should-not-work.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(b"bad lineage").decode("ascii"),
+            "source_artifact_ids": [source_artifact["id"]],
+            "metadata": {},
+        },
+    )
+
+    assert create_response.status_code == 404, create_response.text
 
 
 @pytest.mark.e2e

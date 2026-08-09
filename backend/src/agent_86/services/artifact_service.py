@@ -6,12 +6,20 @@ from agent_86.domain.models.artifact import Artifact
 from agent_86.domain.schemas.artifact import CreateArtifactRequest
 from agent_86.repositories.artifact_repository import ArtifactRepository
 from agent_86.services.blob_storage_service import BlobDownload, BlobStorageService
+from agent_86.services.message_service import MessageService
 
 
 class ArtifactNotFoundError(Exception):
     def __init__(self, artifact_id: str, session_id: str) -> None:
         super().__init__(f"Artifact '{artifact_id}' not found in session '{session_id}'")
         self.artifact_id = artifact_id
+        self.session_id = session_id
+
+
+class MessageNotFoundError(Exception):
+    def __init__(self, message_id: str, session_id: str) -> None:
+        super().__init__(f"Message '{message_id}' not found in session '{session_id}'")
+        self.message_id = message_id
         self.session_id = session_id
 
 
@@ -22,6 +30,8 @@ class ArtifactWithContent:
 
 
 class ArtifactService:
+    GENERATED_ARTIFACT_KIND = "generated"
+
     def __init__(
         self,
         repository: ArtifactRepository,
@@ -31,6 +41,72 @@ class ArtifactService:
         self._blob_storage_service = blob_storage_service
 
     async def upload_artifact(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        metadata: dict,
+    ) -> Artifact:
+        return await self._store_artifact(
+            session_id=session_id,
+            user_id=user_id,
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            metadata=metadata,
+        )
+
+    async def create_generated_artifact(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        source_artifact_ids: list[str],
+        generated_by_message_id: str | None,
+        metadata: dict,
+        message_service: MessageService | None = None,
+    ) -> Artifact:
+        validated_source_artifact_ids = await self.validate_artifact_ids(
+            user_id=user_id,
+            session_id=session_id,
+            artifact_ids=source_artifact_ids,
+        )
+
+        normalized_message_id = generated_by_message_id.strip() if generated_by_message_id else None
+        if normalized_message_id:
+            if message_service is None:
+                raise ValueError("message_service is required when generated_by_message_id is provided")
+
+            message = await message_service.get_message(
+                user_id=user_id,
+                session_id=session_id,
+                message_id=normalized_message_id,
+            )
+            if message is None:
+                raise MessageNotFoundError(normalized_message_id, session_id)
+
+        generated_metadata = self._build_generated_metadata(
+            metadata=metadata,
+            source_artifact_ids=validated_source_artifact_ids,
+            generated_by_message_id=normalized_message_id,
+        )
+
+        return await self._store_artifact(
+            session_id=session_id,
+            user_id=user_id,
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            metadata=generated_metadata,
+        )
+
+    async def _store_artifact(
         self,
         *,
         session_id: str,
@@ -126,6 +202,22 @@ class ArtifactService:
             normalized_ids.append(normalized_id)
 
         return normalized_ids
+
+    def _build_generated_metadata(
+        self,
+        *,
+        metadata: dict,
+        source_artifact_ids: list[str],
+        generated_by_message_id: str | None,
+    ) -> dict:
+        generated_metadata = dict(metadata)
+        generated_metadata["artifact_kind"] = self.GENERATED_ARTIFACT_KIND
+        generated_metadata["source_artifact_ids"] = source_artifact_ids
+
+        if generated_by_message_id is not None and generated_by_message_id.strip():
+            generated_metadata["generated_by_message_id"] = generated_by_message_id.strip()
+
+        return generated_metadata
 
     def _normalize_filename(self, filename: str) -> str:
         normalized = Path(filename).name.strip()
