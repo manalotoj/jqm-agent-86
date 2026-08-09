@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     web_search_max_query_length: int = Field(default=200, ge=1)
     web_search_block_duplicate_queries: bool = True
     tool_roundtrip_max_per_request: int = Field(default=4, ge=0)
+    bicep_composition_base_url: str = "http://127.0.0.1:5057"
 
     entra_tenant_id: str = Field(min_length=1)
     entra_api_client_id: str = Field(min_length=1)

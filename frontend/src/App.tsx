@@ -484,15 +484,10 @@ function MessageBubble({
 
 function EmptyConversationState() {
   return (
-    <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed bg-muted/20 px-6 py-12 text-center">
+    <div className="flex h-full items-center justify-center rounded-2xl border border-dashed bg-muted/20 px-6 py-12 text-center">
       <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
         <Sparkles className="size-5" />
       </div>
-      <h3 className="mt-4 text-lg font-semibold">Start the conversation</h3>
-      <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        Send the first message in this session to create persisted chat history, stream assistant
-        responses, and exercise the backend session/message flow end to end.
-      </p>
     </div>
   );
 }
@@ -518,6 +513,7 @@ function AuthenticatedApp() {
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
+  const [isStreamingActive, setIsStreamingActive] = useState(false);
   const [lastStreamModel, setLastStreamModel] = useState<string | null>(null);
 
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -560,6 +556,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     setChatError(null);
     setStreamingStatus(null);
+    setIsStreamingActive(false);
     setLastStreamModel(null);
   }, [selectedSession?.id]);
 
@@ -855,6 +852,7 @@ function AuthenticatedApp() {
 
     setChatError(null);
     setStreamingStatus("Starting response…");
+    setIsStreamingActive(true);
     setLastStreamModel(null);
     setDraftMessage("");
     setSelectedArtifactIds([]);
@@ -932,6 +930,7 @@ function AuthenticatedApp() {
             }
 
             setStreamingStatus("Response complete.");
+            setIsStreamingActive(false);
           },
           onErrorEvent: (event) => {
             streamHadError = true;
@@ -942,6 +941,7 @@ function AuthenticatedApp() {
 
             setChatError(message);
             setStreamingStatus(null);
+            setIsStreamingActive(false);
 
             queryClient.setQueryData<Message[]>(queryKey, (existing = []) =>
               existing.filter((message) => message.id !== optimisticAssistantMessage.id),
@@ -950,6 +950,7 @@ function AuthenticatedApp() {
           onDone: () => {
             if (!streamHadError) {
               setStreamingStatus("Saved to session history.");
+              setIsStreamingActive(false);
             }
           },
         },
@@ -959,6 +960,7 @@ function AuthenticatedApp() {
       const nextError = error instanceof Error ? error.message : "Unable to send the message.";
       setChatError(nextError);
       setStreamingStatus(null);
+      setIsStreamingActive(false);
 
       queryClient.setQueryData<Message[]>(queryKey, (existing = []) =>
         existing.filter(
@@ -1349,7 +1351,11 @@ function AuthenticatedApp() {
 
               {streamingStatus ? (
                 <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
-                  <LoaderCircle className="size-4 animate-spin" />
+                  {isStreamingActive ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="size-4 text-emerald-600" />
+                  )}
                   <span>{streamingStatus}</span>
                 </div>
               ) : null}

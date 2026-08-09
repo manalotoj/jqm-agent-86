@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from agent_86.api.routes.azure_bicep_conversion import router as azure_bicep_conversion_router
 from agent_86.api.routes.artifacts import router as artifacts_router
 from agent_86.api.routes.chat import router as chat_router
 from agent_86.api.routes.health import router as health_router
@@ -14,3 +15,4 @@ router.include_router(messages_router)
 router.include_router(artifacts_router)
 router.include_router(chat_router)
 router.include_router(session_summaries_router)
+router.include_router(azure_bicep_conversion_router)

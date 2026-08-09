@@ -1,0 +1,1 @@
+"""HTTP client integration for the local Bicep composition sidecar."""

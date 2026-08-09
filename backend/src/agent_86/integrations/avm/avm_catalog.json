@@ -1,0 +1,19 @@
+{
+  "modules": [
+    {
+      "module_path": "avm/res/storage/storage-account",
+      "resource_type": "Microsoft.Storage/storageAccounts",
+      "summary": "Azure Verified Module for Storage Accounts"
+    },
+    {
+      "module_path": "avm/res/key-vault/vault",
+      "resource_type": "Microsoft.KeyVault/vaults",
+      "summary": "Azure Verified Module for Key Vault"
+    },
+    {
+      "module_path": "avm/res/web/site",
+      "resource_type": "Microsoft.Web/sites",
+      "summary": "Azure Verified Module for App Service sites"
+    }
+  ]
+}

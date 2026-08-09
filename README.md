@@ -19,6 +19,15 @@ The repository also includes a Streamlit development UI that signs the user in w
 - Backend bearer-token validation via OpenID metadata discovery and JWKS signing keys
 - Per-user ownership enforcement for sessions and messages
 
+## Azure Bicep conversion testing assets
+
+The Azure Bicep conversion feature includes manual testing assets in `/Users/johnmanaloto/source/github/jqm-agent-86/docs`:
+
+- API overview: `/Users/johnmanaloto/source/github/jqm-agent-86/docs/azure-bicep-conversion-api.md`
+- Manual testing guide: `/Users/johnmanaloto/source/github/jqm-agent-86/docs/azure-bicep-conversion-manual-testing.md`
+- Postman collection: `/Users/johnmanaloto/source/github/jqm-agent-86/docs/postman/azure-bicep-conversion.postman_collection.json`
+- Postman environment template: `/Users/johnmanaloto/source/github/jqm-agent-86/docs/postman/azure-bicep-conversion.local.postman_environment.json`
+
 ## Architecture Summary
 
 - **FastAPI** provides the HTTP API surface and request orchestration

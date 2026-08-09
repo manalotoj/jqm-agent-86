@@ -4,6 +4,10 @@ from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient
 
 from agent_86.core.config import Settings, get_settings
+from agent_86.integrations.avm.avm_catalog_client import AvmCatalogClient
+from agent_86.integrations.bicep.bicep_tool_client import BicepToolClient
+from agent_86.integrations.azure.resource_export_client import ResourceExportClient
+from agent_86.integrations.bicep_composition.composition_api_client import CompositionApiClient
 from agent_86.repositories.cosmos_artifact_repository import CosmosArtifactRepository
 from agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
 from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
@@ -17,6 +21,8 @@ from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
 from agent_86.services.session_summary_service import SessionSummaryService
+from agent_86.services.azure_bicep_conversion.export_pipeline import ExportPipeline
+from agent_86.services.azure_bicep_conversion.orchestrator import AzureBicepConversionOrchestrator
 from agent_86.services.web_search_service import WebSearchService
 from agent_86.services.tool_service import ToolService
 from agent_86.tools.bootstrap import build_default_tool_service
@@ -139,6 +145,41 @@ def _tool_service() -> ToolService:
 
 
 @lru_cache(maxsize=1)
+def _resource_export_client() -> ResourceExportClient:
+    return ResourceExportClient()
+
+
+@lru_cache(maxsize=1)
+def _bicep_tool_client() -> BicepToolClient:
+    return BicepToolClient()
+
+
+@lru_cache(maxsize=1)
+def _avm_catalog_client() -> AvmCatalogClient:
+    return AvmCatalogClient()
+
+
+@lru_cache(maxsize=1)
+def _composition_api_client() -> CompositionApiClient:
+    return CompositionApiClient(base_url=_settings().bicep_composition_base_url)
+
+
+@lru_cache(maxsize=1)
+def _export_pipeline() -> ExportPipeline:
+    return ExportPipeline(resource_export_client=_resource_export_client())
+
+
+@lru_cache(maxsize=1)
+def _azure_bicep_conversion_orchestrator() -> AzureBicepConversionOrchestrator:
+    return AzureBicepConversionOrchestrator(
+        export_pipeline=_export_pipeline(),
+        bicep_tool_client=_bicep_tool_client(),
+        avm_catalog_client=_avm_catalog_client(),
+        composition_api_client=_composition_api_client(),
+    )
+
+
+@lru_cache(maxsize=1)
 def _session_summary_service_instance() -> SessionSummaryService:
     return SessionSummaryService(
         _session_summary_repository(),
@@ -176,6 +217,10 @@ def get_model_router() -> ModelRouter:
 
 def get_tool_service() -> ToolService:
     return _tool_service()
+
+
+def get_azure_bicep_conversion_orchestrator() -> AzureBicepConversionOrchestrator:
+    return _azure_bicep_conversion_orchestrator()
 
 
 def get_session_summary_service() -> SessionSummaryService:

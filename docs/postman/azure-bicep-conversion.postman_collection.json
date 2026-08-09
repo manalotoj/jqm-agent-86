@@ -1,0 +1,427 @@
+{
+  "info": {
+    "name": "Azure Bicep Conversion Manual Test",
+    "description": "Manual end-to-end Postman collection for the Azure Bicep conversion flow. This covers session creation, SSE conversion invocation, artifact listing, artifact inspection, and artifact download.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "subscriptionId",
+      "value": ""
+    },
+    {
+      "key": "resourceGroupName",
+      "value": ""
+    },
+    {
+      "key": "azureEnvironment",
+      "value": "AzureCloud"
+    },
+    {
+      "key": "sessionId",
+      "value": ""
+    },
+    {
+      "key": "artifactId",
+      "value": ""
+    },
+    {
+      "key": "label",
+      "value": "manual-postman-test"
+    }
+  ],
+  "item": [
+    {
+      "name": "Azure Bicep Conversion Manual Test",
+      "item": [
+        {
+          "name": "Create Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Azure Bicep Conversion Manual Test\",\n  \"metadata\": {\n    \"source\": \"postman\",\n    \"feature\": \"azure-bicep-conversion\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions"
+              ]
+            },
+            "description": "Creates a session and stores the returned session ID into the collection/environment variable `sessionId`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Session created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.environment.set(\"sessionId\", body.id);",
+                  "",
+                  "pm.test(\"Session ID captured\", function () {",
+                  "  pm.expect(body.id).to.be.a(\"string\").and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Convert Resource Group to Bicep (SSE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subscription_id\": \"{{subscriptionId}}\",\n  \"resource_group_name\": \"{{resourceGroupName}}\",\n  \"azure_environment\": \"{{azureEnvironment}}\",\n  \"gov_approved_avm_modules\": [],\n  \"metadata\": {\n    \"label\": \"{{label}}\",\n    \"source\": \"postman\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/azure-bicep-conversion/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "{{sessionId}}",
+                "azure-bicep-conversion",
+                "stream"
+              ]
+            },
+            "description": "Invokes the conversion SSE endpoint. Inspect the raw streamed response manually. Expected event order: start, complete|error, done. If successful, use the List Artifacts request next to capture the generated artifact ID."
+          }
+        },
+        {
+          "name": "List Artifacts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/artifacts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "{{sessionId}}",
+                "artifacts"
+              ]
+            },
+            "description": "Lists session artifacts and stores the generated conversion artifact ID into `artifactId`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Artifacts listed\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Artifact array returned\", function () {",
+                  "  pm.expect(body).to.be.an(\"array\");",
+                  "  pm.expect(body.length).to.be.greaterThan(0);",
+                  "});",
+                  "",
+                  "const zipArtifact = body.find(a =>",
+                  "  a.filename && a.filename.endsWith(\".zip\") &&",
+                  "  a.metadata &&",
+                  "  a.metadata.conversion_kind === \"azure_export_to_bicep\"",
+                  ");",
+                  "",
+                  "pm.test(\"Conversion artifact exists\", function () {",
+                  "  pm.expect(zipArtifact).to.exist;",
+                  "});",
+                  "",
+                  "if (zipArtifact) {",
+                  "  pm.environment.set(\"artifactId\", zipArtifact.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Artifact Metadata",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/artifacts/{{artifactId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "{{sessionId}}",
+                "artifacts",
+                "{{artifactId}}"
+              ]
+            },
+            "description": "Retrieves artifact metadata for the generated conversion zip."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Artifact metadata retrieved\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Artifact is a generated conversion zip\", function () {",
+                  "  pm.expect(body.filename).to.match(/\\.zip$/);",
+                  "  pm.expect(body.content_type).to.eql(\"application/zip\");",
+                  "  pm.expect(body.metadata.conversion_kind).to.eql(\"azure_export_to_bicep\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download Artifact",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/artifacts/{{artifactId}}/download",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "{{sessionId}}",
+                "artifacts",
+                "{{artifactId}}",
+                "download"
+              ]
+            },
+            "description": "Downloads the generated zip artifact. Save the response and inspect the archive contents manually."
+          }
+        },
+        {
+          "name": "Negative - Missing Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subscription_id\": \"{{subscriptionId}}\",\n  \"resource_group_name\": \"{{resourceGroupName}}\",\n  \"azure_environment\": \"{{azureEnvironment}}\",\n  \"gov_approved_avm_modules\": [],\n  \"metadata\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/not-a-real-session/azure-bicep-conversion/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "not-a-real-session",
+                "azure-bicep-conversion",
+                "stream"
+              ]
+            },
+            "description": "Verifies the route returns 404 when the session does not exist."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Missing session returns 404\", function () {",
+                  "  pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Negative - Invalid Body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subscription_id\": \"\",\n  \"resource_group_name\": \"\",\n  \"azure_environment\": \"NotAzure\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/azure-bicep-conversion/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "{{sessionId}}",
+                "azure-bicep-conversion",
+                "stream"
+              ]
+            },
+            "description": "Verifies request validation rejects invalid conversion input."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid request returns 422\", function () {",
+                  "  pm.response.to.have.status(422);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Negative - No Auth",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subscription_id\": \"{{subscriptionId}}\",\n  \"resource_group_name\": \"{{resourceGroupName}}\",\n  \"azure_environment\": \"{{azureEnvironment}}\",\n  \"gov_approved_avm_modules\": [],\n  \"metadata\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/azure-bicep-conversion/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sessions",
+                "{{sessionId}}",
+                "azure-bicep-conversion",
+                "stream"
+              ]
+            },
+            "description": "Verifies authorization is enforced when no bearer token is supplied."
+          }
+        }
+      ]
+    }
+  ]
+}
