@@ -11,6 +11,7 @@ from openai.types.responses.response_input_item_param import FunctionCallOutput
 
 from agent_86.core.config import Settings
 from agent_86.domain.models.message import Message, MessageRole
+from agent_86.domain.schemas.session_summary import ChatSessionSummary
 from agent_86.tools.tool import ToolContext, ToolResult
 from agent_86.services.tool_service import ToolService
 from agent_86.services.tool_selection import should_require_web_search
@@ -38,6 +39,11 @@ class ChatStreamEvent:
 
 
 ChatStreamEventCallback = Callable[[ChatStreamEvent], Awaitable[None] | None]
+DEFAULT_MAX_TOOL_ROUNDTRIPS_PER_REQUEST = 4
+ROUNDTRIP_LIMIT_SYSTEM_MESSAGE = (
+    "Tool usage limit reached for this request. Do not call any more tools. "
+    "Provide the best possible final answer using only the conversation and prior tool results."
+)
 
 
 class ChatModelService:
@@ -89,6 +95,36 @@ class ChatModelService:
             stream=True,
         )
 
+    async def generate_structured_summary(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        context_payload: dict[str, Any],
+    ) -> ChatSessionSummary:
+        response = await self._client.responses.create(
+            model=model,
+            input=[
+                self._build_message_item("system", system_prompt),
+                self._build_message_item(
+                    "user",
+                    json.dumps(context_payload, ensure_ascii=False),
+                ),
+            ],
+            tools=[],
+        )
+
+        output_text = getattr(response, "output_text", "")
+        if not output_text and hasattr(response, "output") and isinstance(response.output, list):
+            output_text = self._extract_output_text(response.output)
+
+        if not output_text:
+            raise RuntimeError("Structured summary generation returned no output text")
+
+        parsed = self._extract_json_object(output_text)
+        normalized = self._normalize_structured_summary_payload(parsed, context_payload)
+        return ChatSessionSummary.model_validate(normalized)
+
     async def _generate_reply_internal(
         self,
         messages: list[Message],
@@ -113,10 +149,15 @@ class ChatModelService:
         streamed_text_parts: list[str] = []
         collected_tool_results: list[ToolResult] = []
         latest_user_message = self._get_latest_user_message(messages)
+        max_tool_roundtrips = self._get_max_tool_roundtrips_per_request()
+        tool_roundtrips_used = 0
+        roundtrip_limit_notice_added = False
 
         while True:
+            tools_allowed = tool_roundtrips_used < max_tool_roundtrips
+            effective_tools_schema = tools_schema if tools_allowed else []
             tool_choice = None
-            if tools_schema:
+            if effective_tools_schema:
                 tool_choice = self._resolve_tool_choice(
                     available_tool_names=available_tool_names,
                     latest_user_message=latest_user_message,
@@ -128,7 +169,7 @@ class ChatModelService:
                     response, streamed_text = await self._stream_response(
                         items=conversation_items,
                         model=model,
-                        tools_schema=tools_schema,
+                        tools_schema=effective_tools_schema,
                         tool_choice=tool_choice,
                         event_callback=event_callback,
                     )
@@ -139,7 +180,7 @@ class ChatModelService:
                     response = await self._client.responses.create(
                         model=model,
                         input=conversation_items,
-                        tools=tools_schema,
+                        tools=effective_tools_schema,
                         tool_choice=tool_choice,
                         stream=False,
                     )
@@ -165,6 +206,18 @@ class ChatModelService:
                     transcript_messages=transcript_events,
                     tool_results=collected_tool_results,
                 )
+
+            if not tools_allowed:
+                if stream:
+                    raise RuntimeError("Model attempted tool calls after tool round-trip limit was reached")
+
+                return ChatModelReply(
+                    assistant_text="OpenAI API error: Model attempted tool calls after tool round-trip limit was reached",
+                    transcript_messages=transcript_events,
+                    tool_results=collected_tool_results,
+                )
+
+            tool_roundtrips_used += 1
 
             for call in function_calls:
                 call_id = getattr(call, "call_id", None) or getattr(call, "item_id", "")
@@ -250,6 +303,12 @@ class ChatModelService:
                         output=str(tool_result.content),
                     )
                 )
+
+            if tool_roundtrips_used >= max_tool_roundtrips and not roundtrip_limit_notice_added:
+                conversation_items.append(
+                    self._build_message_item("system", ROUNDTRIP_LIMIT_SYSTEM_MESSAGE)
+                )
+                roundtrip_limit_notice_added = True
 
     def _build_tools_schema(self, available_tool_names: list[str]) -> list[dict[str, Any]]:
         tools_schema = []
@@ -340,6 +399,18 @@ class ChatModelService:
 
         return []
 
+    def _get_max_tool_roundtrips_per_request(self) -> int:
+        settings = getattr(self, "_settings", None)
+        configured_value = getattr(
+            settings,
+            "tool_roundtrip_max_per_request",
+            DEFAULT_MAX_TOOL_ROUNDTRIPS_PER_REQUEST,
+        )
+        if not isinstance(configured_value, int):
+            return DEFAULT_MAX_TOOL_ROUNDTRIPS_PER_REQUEST
+
+        return max(0, configured_value)
+
     def _get_latest_user_message(self, messages: list[Message]) -> str:
         for message in reversed(messages):
             if message.role == "user":
@@ -418,3 +489,74 @@ class ChatModelService:
         result = event_callback(event)
         if result is not None:
             await result
+
+    def _extract_output_text(self, output_items: list[Any]) -> str:
+        parts: list[str] = []
+        for item in output_items:
+            content = getattr(item, "content", None)
+            if not isinstance(content, list):
+                continue
+
+            for part in content:
+                text = getattr(part, "text", None)
+                if isinstance(text, str) and text:
+                    parts.append(text)
+
+        return "".join(parts)
+
+    def _extract_json_object(self, value: str) -> dict[str, Any]:
+        text = value.strip()
+        if text.startswith("```"):
+            segments = [segment.strip() for segment in text.split("```") if segment.strip()]
+            for segment in segments:
+                candidate = segment
+                if candidate.lower().startswith("json"):
+                    candidate = candidate[4:].strip()
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
+
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("Structured summary response must be a JSON object")
+        return parsed
+
+    def _normalize_structured_summary_payload(
+        self,
+        payload: dict[str, Any],
+        context_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = dict(payload)
+
+        if "artifact_refs" in normalized and "artifacts_generated" not in normalized:
+            normalized["artifacts_generated"] = normalized.pop("artifact_refs")
+
+        normalized.setdefault("session_id", context_payload.get("session_id", "unknown-session"))
+        normalized.setdefault("date_range_start", context_payload.get("date_range_start"))
+        normalized.setdefault("date_range_end", context_payload.get("date_range_end"))
+
+        if not normalized.get("one_line_summary"):
+            title = str(normalized.get("title", "")).strip()
+            topics = normalized.get("topics")
+            topic_list = [str(topic).strip() for topic in topics] if isinstance(topics, list) else []
+            topic_list = [topic for topic in topic_list if topic]
+
+            if title and topic_list:
+                normalized["one_line_summary"] = f"{title}: {', '.join(topic_list)}."
+            elif title:
+                normalized["one_line_summary"] = title
+            else:
+                normalized["one_line_summary"] = "Session summary generated from chat context."
+
+        normalized.setdefault("topics", [])
+        normalized.setdefault("key_decisions", [])
+        normalized.setdefault("action_items", [])
+        normalized.setdefault("artifacts_generated", [])
+        normalized.setdefault("open_questions", [])
+        normalized.setdefault("tools_used", [])
+        normalized.setdefault("tags", [])
+
+        return normalized

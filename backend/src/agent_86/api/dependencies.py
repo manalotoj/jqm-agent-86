@@ -1,11 +1,13 @@
 from functools import lru_cache
 
+from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient
 
 from agent_86.core.config import Settings, get_settings
 from agent_86.repositories.cosmos_artifact_repository import CosmosArtifactRepository
 from agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
 from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
+from agent_86.repositories.cosmos_session_summary_repository import CosmosSessionSummaryRepository
 from agent_86.services.artifact_service import ArtifactService
 from agent_86.services.azure_blob_storage_service import AzureBlobStorageService
 from agent_86.services.blob_storage_service import BlobStorageService
@@ -13,6 +15,7 @@ from agent_86.services.chat_model_service import ChatModelService
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
+from agent_86.services.session_summary_service import SessionSummaryService
 from agent_86.services.web_search_service import WebSearchService
 from agent_86.services.tool_service import ToolService
 from agent_86.tools.bootstrap import build_default_tool_service
@@ -56,6 +59,16 @@ def _artifacts_container():
 
 
 @lru_cache(maxsize=1)
+def _summaries_container():
+    settings = _settings()
+    database = _cosmos_client().get_database_client(settings.cosmos_database_name)
+    return database.create_container_if_not_exists(
+        id=settings.cosmos_summaries_container_name,
+        partition_key=PartitionKey(path="/user_id"),
+    )
+
+
+@lru_cache(maxsize=1)
 def _session_repository() -> CosmosSessionRepository:
     return CosmosSessionRepository(_sessions_container())
 
@@ -68,6 +81,11 @@ def _message_repository() -> CosmosMessageRepository:
 @lru_cache(maxsize=1)
 def _artifact_repository() -> CosmosArtifactRepository:
     return CosmosArtifactRepository(_artifacts_container())
+
+
+@lru_cache(maxsize=1)
+def _session_summary_repository() -> CosmosSessionSummaryRepository:
+    return CosmosSessionSummaryRepository(_summaries_container())
 
 
 @lru_cache(maxsize=1)
@@ -114,6 +132,17 @@ def _tool_service() -> ToolService:
     return build_default_tool_service(web_search_service=_web_search_service())
 
 
+@lru_cache(maxsize=1)
+def _session_summary_service_instance() -> SessionSummaryService:
+    return SessionSummaryService(
+        _session_summary_repository(),
+        _session_service_instance(),
+        _message_service_instance(),
+        _artifact_service_instance(),
+        _chat_model_service(),
+    )
+
+
 def get_session_service() -> SessionService:
     return _session_service_instance()
 
@@ -136,3 +165,7 @@ def get_model_router() -> ModelRouter:
 
 def get_tool_service() -> ToolService:
     return _tool_service()
+
+
+def get_session_summary_service() -> SessionSummaryService:
+    return _session_summary_service_instance()

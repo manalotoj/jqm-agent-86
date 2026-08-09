@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from agent_86.core.config import get_settings
 from agent_86.mcp.adapter import Agent86McpAdapter
+from agent_86.services.tool_guardrails import WebSearchGuardrails
 from agent_86.services.tool_service import ToolService
 from agent_86.tools.bootstrap import build_default_tool_registry
 
@@ -42,7 +44,10 @@ async def run_stdio_server() -> None:
     registry = build_default_tool_registry()
     adapter = Agent86McpAdapter(
         registry=registry,
-        tool_service=ToolService(registry),
+        tool_service=ToolService(
+            registry,
+            web_search_guardrails=WebSearchGuardrails.from_settings(get_settings()),
+        ),
     )
 
     Server = runtime["Server"]

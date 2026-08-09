@@ -29,6 +29,7 @@ COSMOS_DATABASE_NAME=your-e2e-database-name
 COSMOS_SESSIONS_CONTAINER_NAME=sessions
 COSMOS_MESSAGES_CONTAINER_NAME=messages
 COSMOS_ARTIFACTS_CONTAINER_NAME=artifacts
+COSMOS_SUMMARIES_CONTAINER_NAME=summaries
 
 # REQUIRED: artifact upload/download e2e coverage uses real Azure Blob Storage.
 # This should point at a dedicated dev/e2e storage container, not production.
@@ -52,7 +53,9 @@ Notes:
 - Artifact routes and artifact-backed chat metadata validation require both `AZURE_BLOB_CONNECTION_STRING` and `AZURE_BLOB_CONTAINER_NAME`; if either is missing, the API will fail startup before `/health` succeeds.
 - Because `common/scripts/start_local.zsh` sources env files in zsh, wrap the real `AZURE_BLOB_CONNECTION_STRING` in single quotes so its semicolons are preserved as part of the value.
 - `COSMOS_ARTIFACTS_CONTAINER_NAME` defaults to `artifacts` in code, but setting it explicitly in e2e config avoids ambiguity and makes the dedicated artifacts container visible in environment review.
+- `COSMOS_SUMMARIES_CONTAINER_NAME` defaults to `summaries` in code, but setting it explicitly in e2e config keeps the summary feature aligned with the actual provisioned container.
 - If your e2e Cosmos account only has the `sessions` and `messages` containers, you can provision the missing artifacts metadata container with `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_artifacts_container.zsh --resource-group <rg> --account-name <cosmos-account>`. The helper is idempotent and creates `artifacts` with partition key `/session_id`.
+- If your e2e Cosmos account is also missing the summaries container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_summaries_container.zsh --resource-group <rg> --account-name <cosmos-account>`. The helper is idempotent and creates `summaries` with partition key `/user_id`.
 - To provision a dedicated e2e blob storage account/container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/create_artifact_blob_storage.zsh --resource-group <rg> --environments e2e` (or omit `--environments` to create both `dev` and `e2e`).
 - To print the resulting env values later without exposing the real account key in terminal scrollback or notes, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/print_artifact_blob_env.zsh --resource-group <rg> --account-name <storage-account-name>`. Add `--show-secrets` only when you intentionally need to patch a local `.env.e2e` file.
 

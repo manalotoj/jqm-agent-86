@@ -29,6 +29,7 @@ from agent_86.api.dependencies import (
     get_message_service,
     get_model_router,
     get_session_service,
+    get_session_summary_service,
     get_tool_service,
 )
 from agent_86.api.routes.chat import choose_tool_names
@@ -37,9 +38,11 @@ from agent_86.auth.provider import TokenValidationError
 from agent_86.core.config import get_settings
 from agent_86.domain.models.artifact import Artifact
 from agent_86.domain.models.message import Message
+from agent_86.domain.models.session_summary import SessionSummary
 from agent_86.domain.schemas.artifact import CreateArtifactRequest
 from agent_86.domain.schemas.message import CreateMessageRequest
 from agent_86.domain.schemas.session import CreateSessionRequest
+from agent_86.domain.schemas.session_summary import ActionItem, ArtifactRef, ChatSessionSummary
 from agent_86.main import create_app
 from agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
 from agent_86.services.artifact_service import ArtifactService
@@ -47,6 +50,7 @@ from agent_86.services.blob_storage_service import BlobDownload
 from agent_86.services.chat_model_service import ChatModelReply
 from agent_86.services.message_service import MessageService
 from agent_86.services.session_service import SessionService
+from agent_86.services.session_summary_service import SessionSummaryService
 from agent_86.tools.tool import ToolContext
 
 
@@ -206,6 +210,28 @@ class InMemoryBlobStorageService:
         self._blobs.pop(blob_name, None)
 
 
+class InMemorySessionSummaryRepository:
+    def __init__(self) -> None:
+        self._summaries: dict[tuple[str, str], SessionSummary] = {}
+
+    async def get_summary(self, user_id: str, session_id: str) -> SessionSummary | None:
+        return self._summaries.get((user_id, session_id))
+
+    async def upsert_summary(self, summary: SessionSummary) -> SessionSummary:
+        existing = self._summaries.get((summary.user_id, summary.session_id))
+        if existing is not None:
+            summary.id = existing.id
+            summary.created_at = existing.created_at
+        elif summary.created_at is None:
+            summary.created_at = datetime.now(UTC)
+
+        if summary.updated_at is None:
+            summary.updated_at = datetime.now(UTC)
+
+        self._summaries[(summary.user_id, summary.session_id)] = summary
+        return summary
+
+
 @pytest.fixture(autouse=True)
 def configured_environment(monkeypatch: pytest.MonkeyPatch):
     values = {
@@ -249,9 +275,17 @@ def api_client():
             )
         ),
         generate_reply_stream=AsyncMock(),
+        generate_structured_summary=AsyncMock(),
     )
     model_router = SimpleNamespace(choose_chat_model=lambda metadata: "gpt-4.1-mini")
     tool_service = SimpleNamespace()
+    session_summary_service = SessionSummaryService(
+        InMemorySessionSummaryRepository(),
+        session_service,
+        message_service,
+        artifact_service,
+        chat_model_service,
+    )
     token_validator = StubTokenValidator(
         {
             "valid-user-1": {"oid": "user-1", "aud": "api://test"},
@@ -267,10 +301,18 @@ def api_client():
     app.dependency_overrides[get_artifact_service] = lambda: artifact_service
     app.dependency_overrides[get_chat_model_service] = lambda: chat_model_service
     app.dependency_overrides[get_model_router] = lambda: model_router
+    app.dependency_overrides[get_session_summary_service] = lambda: session_summary_service
     app.dependency_overrides[get_tool_service] = lambda: tool_service
 
     with TestClient(app) as client:
-        yield client, session_service, message_service, artifact_service, chat_model_service
+        yield (
+            client,
+            session_service,
+            message_service,
+            artifact_service,
+            chat_model_service,
+            session_summary_service,
+        )
 
 
 def auth_header(token: str) -> dict[str, str]:
@@ -288,7 +330,7 @@ def create_session_for(client: TestClient, token: str, title: str = "Session") -
 
 
 def test_missing_token_returns_401(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     response = client.get("/sessions")
 
@@ -297,7 +339,7 @@ def test_missing_token_returns_401(api_client):
 
 
 def test_invalid_token_returns_401(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     response = client.get("/sessions", headers=auth_header("not-a-valid-token"))
 
@@ -306,7 +348,7 @@ def test_invalid_token_returns_401(api_client):
 
 
 def test_valid_token_authenticates_user_by_oid(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     created = create_session_for(client, "valid-user-1", title="Owned by oid")
     listed = client.get("/sessions", headers=auth_header("valid-user-1"))
@@ -317,7 +359,7 @@ def test_valid_token_authenticates_user_by_oid(api_client):
 
 
 def test_sub_claim_is_used_when_oid_is_missing(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     response = client.post(
         "/sessions",
@@ -330,7 +372,7 @@ def test_sub_claim_is_used_when_oid_is_missing(api_client):
 
 
 def test_token_missing_oid_and_sub_is_rejected(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     response = client.get("/sessions", headers=auth_header("missing-identity"))
 
@@ -339,7 +381,7 @@ def test_token_missing_oid_and_sub_is_rejected(api_client):
 
 
 def test_allowed_origin_get_response_includes_cors_header(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     response = client.get(
         "/sessions",
@@ -355,7 +397,7 @@ def test_allowed_origin_get_response_includes_cors_header(api_client):
 
 
 def test_allowed_origin_preflight_returns_cors_headers(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     response = client.options(
         "/sessions",
@@ -375,7 +417,7 @@ def test_allowed_origin_preflight_returns_cors_headers(api_client):
 
 
 def test_session_ownership_is_enforced_for_list_get_update_delete_and_messages(api_client):
-    client, session_service, message_service, _, _ = api_client
+    client, session_service, message_service, _, _, _ = api_client
 
     owned = create_session_for(client, "valid-user-1", title="User 1 session")
     other = create_session_for(client, "valid-user-2", title="User 2 session")
@@ -430,7 +472,7 @@ def test_session_ownership_is_enforced_for_list_get_update_delete_and_messages(a
 
 
 def test_chat_route_passes_authenticated_user_into_tool_context(api_client):
-    client, _, _, _, chat_model_service = api_client
+    client, _, _, _, chat_model_service, _ = api_client
 
     session = create_session_for(client, "valid-user-1", title="Chat session")
 
@@ -471,7 +513,7 @@ def test_choose_tool_names_excludes_web_search_when_toggle_disabled():
 
 
 def test_artifact_routes_and_chat_attachment_metadata_enforce_ownership(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     owned_session = create_session_for(client, "valid-user-1", title="Owned")
     other_session = create_session_for(client, "valid-user-2", title="Other")
@@ -545,7 +587,7 @@ def test_artifact_routes_and_chat_attachment_metadata_enforce_ownership(api_clie
 
 
 def test_generated_artifact_route_persists_lineage_and_enforces_source_ownership(api_client):
-    client, _, _, _, _ = api_client
+    client, _, _, _, _, _ = api_client
 
     owned_session = create_session_for(client, "valid-user-1", title="Owned")
     other_session = create_session_for(client, "valid-user-2", title="Other")
@@ -636,7 +678,7 @@ def test_generated_artifact_route_persists_lineage_and_enforces_source_ownership
 
 
 def test_chat_route_persists_generated_artifacts_from_tool_results(api_client):
-    client, _, _, _, chat_model_service = api_client
+    client, _, _, _, chat_model_service, _ = api_client
 
     session = create_session_for(client, "valid-user-1", title="Generated outputs")
     source_upload_response = client.post(
@@ -721,3 +763,164 @@ def test_startup_fails_with_concise_error_when_auth_configuration_is_missing(
         create_app()
 
     assert str(exc_info.value) == "Missing required backend configuration: ENTRA_TENANT_ID"
+
+
+def test_get_session_summary_returns_404_when_missing(api_client):
+    client, _, _, _, _, _ = api_client
+
+    session = create_session_for(client, "valid-user-1", title="Summary target")
+
+    response = client.get(
+        f"/sessions/{session['id']}/summary",
+        headers=auth_header("valid-user-1"),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"Summary for session '{session['id']}' not found"
+
+
+def test_session_summary_routes_enforce_ownership(api_client):
+    client, _, _, _, _, _ = api_client
+
+    owned = create_session_for(client, "valid-user-1", title="Owned")
+
+    response = client.get(
+        f"/sessions/{owned['id']}/summary",
+        headers=auth_header("valid-user-2"),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"Session '{owned['id']}' not found"
+
+
+def test_generate_session_summary_creates_and_overwrites_existing_summary(api_client):
+    client, _, _, _, chat_model_service, session_summary_service = api_client
+
+    session = create_session_for(client, "valid-user-1", title="Summary target")
+    create_message_response = client.post(
+        f"/sessions/{session['id']}/messages",
+        headers=auth_header("valid-user-1"),
+        json={"role": "user", "content": "Discuss migration plan", "metadata": {}},
+    )
+    assert create_message_response.status_code == 201, create_message_response.text
+
+    first_generated = ChatSessionSummary(
+        session_id=session["id"],
+        title="Migration planning discussion",
+        date_range_start=datetime(2026, 1, 1, tzinfo=UTC),
+        date_range_end=datetime(2026, 1, 1, 1, tzinfo=UTC),
+        one_line_summary="The session focused on planning a migration.",
+        topics=["migration", "planning"],
+        key_decisions=["Use phased rollout"],
+        action_items=[ActionItem(description="Draft runbook", status="open", owner="John")],
+        artifacts_generated=[],
+        open_questions=["Exact cutover window?"],
+        tools_used=[],
+        tags=["planning"],
+    )
+    second_generated = ChatSessionSummary(
+        session_id=session["id"],
+        title="Updated migration plan",
+        date_range_start=datetime(2026, 1, 1, tzinfo=UTC),
+        date_range_end=datetime(2026, 1, 1, 2, tzinfo=UTC),
+        one_line_summary="The session finalized the updated migration approach.",
+        topics=["migration", "rollout"],
+        key_decisions=["Roll out by region"],
+        action_items=[ActionItem(description="Notify stakeholders", status="done", owner="Ops")],
+        artifacts_generated=[
+            ArtifactRef(name="plan.docx", artifact_type="docx", location="artifact-123")
+        ],
+        open_questions=[],
+        tools_used=["web_search"],
+        tags=["decision"],
+    )
+    chat_model_service.generate_structured_summary.side_effect = [first_generated, second_generated]
+
+    first_response = client.post(
+        f"/sessions/{session['id']}/summary",
+        headers=auth_header("valid-user-1"),
+    )
+    assert first_response.status_code == 201, first_response.text
+    first_payload = first_response.json()
+    assert first_payload["title"] == "Migration planning discussion"
+
+    second_response = client.post(
+        f"/sessions/{session['id']}/summary",
+        headers=auth_header("valid-user-1"),
+    )
+    assert second_response.status_code == 201, second_response.text
+    second_payload = second_response.json()
+    assert second_payload["id"] == first_payload["id"]
+    assert second_payload["title"] == "Updated migration plan"
+    assert second_payload["one_line_summary"] == "The session finalized the updated migration approach."
+    assert second_payload["tools_used"] == ["web_search"]
+
+    stored_summary = client.get(
+        f"/sessions/{session['id']}/summary",
+        headers=auth_header("valid-user-1"),
+    )
+    assert stored_summary.status_code == 200, stored_summary.text
+    assert stored_summary.json()["title"] == "Updated migration plan"
+    assert session_summary_service is not None
+
+
+def test_generate_session_summary_uses_messages_and_persisted_artifacts(api_client):
+    client, _, _, _, chat_model_service, _ = api_client
+
+    session = create_session_for(client, "valid-user-1", title="Artifacts and tools")
+    upload_response = client.post(
+        f"/sessions/{session['id']}/artifacts/upload",
+        headers=auth_header("valid-user-1"),
+        files={"file": ("plan.docx", b"doc body", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        data={"metadata": '{"label": "draft"}'},
+    )
+    assert upload_response.status_code == 201, upload_response.text
+    uploaded_artifact = upload_response.json()
+
+    create_user_response = client.post(
+        f"/sessions/{session['id']}/messages",
+        headers=auth_header("valid-user-1"),
+        json={"role": "user", "content": "Summarize our project plan", "metadata": {"tools": ["web_search"]}},
+    )
+    assert create_user_response.status_code == 201, create_user_response.text
+    create_tool_response = client.post(
+        f"/sessions/{session['id']}/messages",
+        headers=auth_header("valid-user-1"),
+        json={
+            "role": "assistant",
+            "content": "Called tool",
+            "metadata": {"message_type": "function_call", "tool_name": "web_search"},
+        },
+    )
+    assert create_tool_response.status_code == 201, create_tool_response.text
+
+    chat_model_service.generate_structured_summary.return_value = ChatSessionSummary(
+        session_id=session["id"],
+        title="Project plan summary",
+        date_range_start=datetime(2026, 1, 1, tzinfo=UTC),
+        date_range_end=datetime(2026, 1, 1, 1, tzinfo=UTC),
+        one_line_summary="The team reviewed the current project plan.",
+        topics=["project plan"],
+        key_decisions=[],
+        action_items=[],
+        artifacts_generated=[],
+        open_questions=[],
+        tools_used=[],
+        tags=[],
+    )
+
+    response = client.post(
+        f"/sessions/{session['id']}/summary",
+        headers=auth_header("valid-user-1"),
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["tools_used"] == ["web_search"]
+    assert payload["artifacts_generated"] == [
+        {
+            "name": "plan.docx",
+            "artifact_type": "docx",
+            "location": uploaded_artifact["id"],
+        }
+    ]

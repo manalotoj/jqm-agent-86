@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 
 import { streamChat } from "@/api/chat";
+import { SessionSummaryCard } from "@/components/SessionSummaryCard";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   AlertDialog,
@@ -66,6 +67,7 @@ import {
 import { downloadArtifact } from "@/api/artifacts";
 import { useArtifacts, useUploadArtifact } from "@/hooks/useArtifacts";
 import { useMessages, messagesQueryKey } from "@/hooks/useMessages";
+import { useGenerateSessionSummary, useSessionSummary } from "@/hooks/useSessionSummary";
 import {
   useCreateSession,
   useDeleteSession,
@@ -86,6 +88,7 @@ const PREMIUM_CHAT_MODEL = "gpt-5.4";
 
 type ComposerModel = typeof DEFAULT_CHAT_MODEL | typeof PREMIUM_CHAT_MODEL;
 type NoticeTone = "success" | "error" | "info";
+type MainContentView = "chat" | "summary";
 
 type AppNotice = {
   id: string;
@@ -535,7 +538,13 @@ function AuthenticatedApp() {
     isLoading: isArtifactsLoading,
     error: artifactsError,
   } = useArtifacts(selectedSession?.id ?? null);
+  const {
+    data: sessionSummary,
+    isLoading: isSessionSummaryLoading,
+    error: sessionSummaryError,
+  } = useSessionSummary(selectedSession?.id ?? null);
   const uploadArtifact = useUploadArtifact(selectedSession?.id ?? null);
+  const generateSessionSummary = useGenerateSessionSummary(selectedSession?.id ?? null);
 
   const lastAssistantMessage = useMemo(() => {
     const assistantMessages = messages.filter((message) => message.role === "assistant");
@@ -552,11 +561,18 @@ function AuthenticatedApp() {
     setLastStreamModel(null);
   }, [selectedSession?.id]);
 
+  useEffect(() => {
+    setMainContentView("chat");
+    setIsRegenerateSummaryDialogOpen(false);
+  }, [selectedSession?.id]);
+
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
   const [artifactActionError, setArtifactActionError] = useState<string | null>(null);
   const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
   const [notices, setNotices] = useState<AppNotice[]>([]);
   const [isArtifactDragActive, setIsArtifactDragActive] = useState(false);
+  const [mainContentView, setMainContentView] = useState<MainContentView>("chat");
+  const [isRegenerateSummaryDialogOpen, setIsRegenerateSummaryDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const dismissNotice = (noticeId: string) => {
@@ -766,6 +782,36 @@ function AuthenticatedApp() {
     } finally {
       setDownloadingArtifactId(null);
     }
+  };
+
+  const handleGenerateSessionSummary = () => {
+    if (!selectedSession) {
+      return;
+    }
+
+    generateSessionSummary.mutate(undefined, {
+      onSuccess: () => {
+        addNotice("Session summary updated.", "success");
+      },
+      onError: (error) => {
+        const message =
+          error instanceof Error ? error.message : "Unable to generate the session summary.";
+        addNotice(message, "error");
+      },
+    });
+  };
+
+  const handleRequestSessionSummaryGeneration = () => {
+    if (!selectedSession) {
+      return;
+    }
+
+    if (sessionSummary) {
+      setIsRegenerateSummaryDialogOpen(true);
+      return;
+    }
+
+    handleGenerateSessionSummary();
   };
 
   const handleSendMessage = async () => {
@@ -1096,67 +1142,113 @@ function AuthenticatedApp() {
           <section className="flex min-h-0 flex-col rounded-2xl border bg-card shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-5">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Conversation</p>
+                <p className="text-sm font-medium text-muted-foreground">
+                  {mainContentView === "chat" ? "Conversation" : "Session summary"}
+                </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Persisted per session via the backend message and chat endpoints.
+                  {mainContentView === "chat"
+                    ? "Persisted per session via the backend message and chat endpoints."
+                    : "Structured recap of what happened in this chat session."}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {MODEL_OPTIONS.map((option) => (
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-full border bg-muted/40 p-1">
                   <Button
-                    key={option.value}
                     type="button"
-                    variant={selectedModel === option.value ? "default" : "outline"}
+                    variant={mainContentView === "chat" ? "secondary" : "ghost"}
                     size="sm"
-                    onClick={() => setSelectedModel(option.value)}
+                    className="rounded-full"
+                    onClick={() => setMainContentView("chat")}
                   >
-                    <WandSparkles className="size-4" />
-                    {option.label}
+                    <MessageSquare className="size-4" />
+                    Chat
                   </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant={webSearchEnabled ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setWebSearchEnabled((current) => !current)}
-                >
-                  <Sparkles className="size-4" />
-                  Web search {webSearchEnabled ? "on" : "off"}
-                </Button>
+                  <Button
+                    type="button"
+                    variant={mainContentView === "summary" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="rounded-full"
+                    onClick={() => setMainContentView("summary")}
+                  >
+                    <Sparkles className="size-4" />
+                    Summary
+                  </Button>
+                </div>
+
+                {mainContentView === "chat" ? (
+                  <div className="flex flex-wrap gap-2">
+                    {MODEL_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        type="button"
+                        variant={selectedModel === option.value ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setSelectedModel(option.value)}
+                      >
+                        <WandSparkles className="size-4" />
+                        {option.label}
+                      </Button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant={webSearchEnabled ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setWebSearchEnabled((current) => !current)}
+                    >
+                      <Sparkles className="size-4" />
+                      Web search {webSearchEnabled ? "on" : "off"}
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             </div>
 
-            <div ref={scrollViewportRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-              {!selectedSession ? (
-                <EmptyConversationState />
-              ) : isMessagesLoading ? (
-                <div className="space-y-4">
-                  {Array.from({ length: 4 }).map((_, index) => (
-                    <div key={index} className={cn("flex", index % 2 === 0 ? "justify-start" : "justify-end")}>
-                      <Skeleton className="h-24 w-full max-w-xl rounded-2xl" />
-                    </div>
-                  ))}
-                </div>
-              ) : messages.length === 0 ? (
-                <EmptyConversationState />
+            <div
+              ref={mainContentView === "chat" ? scrollViewportRef : undefined}
+              className="min-h-0 flex-1 overflow-y-auto px-6 py-6"
+            >
+              {mainContentView === "chat" ? (
+                !selectedSession ? (
+                  <EmptyConversationState />
+                ) : isMessagesLoading ? (
+                  <div className="space-y-4">
+                    {Array.from({ length: 4 }).map((_, index) => (
+                      <div key={index} className={cn("flex", index % 2 === 0 ? "justify-start" : "justify-end")}>
+                        <Skeleton className="h-24 w-full max-w-xl rounded-2xl" />
+                      </div>
+                    ))}
+                  </div>
+                ) : messages.length === 0 ? (
+                  <EmptyConversationState />
+                ) : (
+                  <div className="space-y-4">
+                    {messages.map((message) => (
+                      <MessageBubble
+                        key={message.id}
+                        message={message}
+                        attachedArtifacts={artifacts}
+                        onDownloadArtifact={(artifact) => {
+                          void handleDownloadArtifact(artifact);
+                        }}
+                        downloadingArtifactId={downloadingArtifactId}
+                      />
+                    ))}
+                  </div>
+                )
               ) : (
-                <div className="space-y-4">
-                  {messages.map((message) => (
-                    <MessageBubble
-                      key={message.id}
-                      message={message}
-                      attachedArtifacts={artifacts}
-                      onDownloadArtifact={(artifact) => {
-                        void handleDownloadArtifact(artifact);
-                      }}
-                      downloadingArtifactId={downloadingArtifactId}
-                    />
-                  ))}
-                </div>
+                <SessionSummaryCard
+                  summary={sessionSummary}
+                  isLoading={isSessionSummaryLoading}
+                  isGenerating={generateSessionSummary.isPending}
+                  errorMessage={sessionSummaryError instanceof Error ? sessionSummaryError.message : null}
+                  hasSession={Boolean(selectedSession)}
+                  onGenerate={handleRequestSessionSummaryGeneration}
+                  generateLabel={sessionSummary ? "Regenerate summary" : "Generate summary"}
+                />
               )}
             </div>
 
-            <div className="border-t px-6 py-5">
+            <div className={cn("border-t px-6 py-5", mainContentView !== "chat" && "hidden")}>
               {artifactActionError ? (
                 <div className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                   {artifactActionError}
@@ -1506,9 +1598,35 @@ function AuthenticatedApp() {
                 </div>
               )}
             </div>
+
           </section>
         </div>
       </main>
+
+      <AlertDialog
+        open={isRegenerateSummaryDialogOpen}
+        onOpenChange={setIsRegenerateSummaryDialogOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Overwrite existing summary?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Regenerating will replace the current saved session summary with a newly generated one.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setIsRegenerateSummaryDialogOpen(false);
+                handleGenerateSessionSummary();
+              }}
+            >
+              Regenerate summary
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={Boolean(sessionToDelete)}

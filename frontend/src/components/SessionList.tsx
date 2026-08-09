@@ -12,9 +12,11 @@ export default function SessionList() {
   const updateSession = useUpdateSession();
   const deleteSession = useDeleteSession();
   const [newTitle, setNewTitle] = useState("");
+  const errorMessage = error instanceof Error ? error.message : "Failed to load sessions.";
+  const safeSessions = Array.isArray(sessions) ? sessions : [];
 
   if (isLoading) return <p>Loading sessions...</p>;
-  if (error) return <p style={{ color: "red" }}>Error: {(error as Error).message}</p>;
+  if (error) return <p style={{ color: "red" }}>Error: {errorMessage}</p>;
 
   return (
     <div>
@@ -38,7 +40,7 @@ export default function SessionList() {
       </div>
 
       <ul>
-        {sessions?.map((session) => (
+        {safeSessions.map((session) => (
           <li key={session.id} style={{ marginBottom: "8px" }}>
             <strong>{session.title || session.id}</strong>
             <button

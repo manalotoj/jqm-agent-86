@@ -2,8 +2,18 @@ import type { IPublicClientApplication, AccountInfo } from "@azure/msal-browser"
 import { apiFetch } from "./client";
 import type { Session, CreateSessionRequest, UpdateSessionRequest } from "../types/session";
 
-export const listSessions = (instance: IPublicClientApplication, account: AccountInfo) =>
-  apiFetch<Session[]>("/sessions", instance, account);
+export async function listSessions(
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+): Promise<Session[]> {
+  const response = await apiFetch<unknown>("/sessions", instance, account);
+
+  if (!Array.isArray(response)) {
+    throw new Error("Invalid sessions response: expected an array.");
+  }
+
+  return response as Session[];
+}
 
 export const getSession = (
   instance: IPublicClientApplication,

@@ -11,6 +11,7 @@ os.environ.setdefault("FOUNDRY_DEFAULT_CHAT_MODEL", "gpt-4.1-mini")
 os.environ.setdefault("FOUNDRY_PREMIUM_CHAT_MODEL", "gpt-5.4")
 
 from agent_86.mcp.adapter import Agent86McpAdapter
+from agent_86.services.tool_guardrails import WebSearchGuardrails
 from agent_86.services.tool_service import ToolService
 from agent_86.tools.tool import ToolContext, ToolResult
 from agent_86.tools.tool_registry import ToolRegistry
@@ -84,15 +85,14 @@ async def test_call_tool_delegates_to_tool_service_and_returns_mcp_result_shape(
         arguments={"query": "latest ai news"},
     )
 
-    tool_service.execute_tools.assert_awaited_once_with(
-        tool_names=["web_search"],
-        query="latest ai news",
-        context=ToolContext(
-            session_id="mcp-stdio",
-            user_id="mcp-client",
-            metadata={"origin": "mcp", "transport": "stdio"},
-        ),
-    )
+    tool_service.execute_tools.assert_awaited_once()
+    execute_call = tool_service.execute_tools.await_args.kwargs
+    assert execute_call["tool_names"] == ["web_search"]
+    assert execute_call["query"] == "latest ai news"
+    assert execute_call["context"].session_id == "mcp-stdio"
+    assert execute_call["context"].user_id == "mcp-client"
+    assert execute_call["context"].metadata["origin"] == "mcp"
+    assert execute_call["context"].metadata["transport"] == "stdio"
     assert web_search_service.queries == ["latest ai news"]
     assert result == {
         "content": [
@@ -150,6 +150,41 @@ async def test_call_tool_returns_mcp_error_shape_for_missing_query_argument():
         },
         "is_error": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_call_tool_blocks_duplicate_query_without_spending_additional_search_credit():
+    web_search_service = RecordingWebSearchService()
+    registry = ToolRegistry(
+        tools=[
+            WebSearchTool(web_search_service),
+        ]
+    )
+    adapter = Agent86McpAdapter(
+        registry=registry,
+        tool_service=ToolService(
+            registry,
+            web_search_guardrails=WebSearchGuardrails(
+                max_calls_per_request=2,
+                block_duplicate_queries=True,
+            ),
+        ),
+    )
+
+    first_result = await adapter.call_tool(
+        name="web_search",
+        arguments={"query": "latest ai news"},
+    )
+    second_result = await adapter.call_tool(
+        name="web_search",
+        arguments={"query": " latest   ai news "},
+    )
+
+    assert web_search_service.queries == ["latest ai news"]
+    assert first_result["is_error"] is False
+    assert second_result["is_error"] is False
+    assert second_result["structured_content"]["metadata"]["blocked"] is True
+    assert second_result["structured_content"]["metadata"]["reason"] == "duplicate_query"
 
 
 def test_server_module_import_does_not_require_optional_mcp_dependency():

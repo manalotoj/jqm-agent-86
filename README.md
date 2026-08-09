@@ -88,6 +88,7 @@ Important settings include:
 - `COSMOS_SESSIONS_CONTAINER_NAME`
 - `COSMOS_MESSAGES_CONTAINER_NAME`
 - `COSMOS_ARTIFACTS_CONTAINER_NAME`
+- `COSMOS_SUMMARIES_CONTAINER_NAME`
 - `COSMOS_VERIFY_SSL`
 - `AZURE_BLOB_CONNECTION_STRING`
 - `AZURE_BLOB_CONTAINER_NAME`
@@ -212,6 +213,7 @@ COSMOS_DATABASE_NAME=agent86
 COSMOS_SESSIONS_CONTAINER_NAME=sessions
 COSMOS_MESSAGES_CONTAINER_NAME=messages
 COSMOS_ARTIFACTS_CONTAINER_NAME=artifacts
+COSMOS_SUMMARIES_CONTAINER_NAME=summaries
 
 AZURE_BLOB_CONNECTION_STRING='your-azure-blob-connection-string'
 AZURE_BLOB_CONTAINER_NAME=agent86-artifacts
@@ -254,12 +256,20 @@ Artifact behavior notes:
 
 - Artifact binary content is stored in Azure Blob Storage.
 - Artifact metadata is stored in Cosmos DB in a dedicated artifacts container.
+- Session summaries are stored in Cosmos DB in a dedicated summaries container.
 - Chat requests may include `metadata.artifact_ids` to attach previously uploaded session artifacts.
 - Current attachment support validates ownership/session membership and persists normalized artifact IDs on the user message; it does not yet inject artifact file content into model prompts.
 - If a dev or e2e Cosmos account is missing the artifacts metadata container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_artifacts_container.zsh --resource-group <rg> --account-name <cosmos-account>` to create `artifacts` with partition key `/session_id`.
+- If a dev or e2e Cosmos account is missing the summaries container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_summaries_container.zsh --resource-group <rg> --account-name <cosmos-account>` to create `summaries` with partition key `/user_id`, or use `--all-dev-accounts` to apply the same container to every Cosmos account in `rg-agent86-dev`.
 - To provision dedicated Azure Blob Storage for artifact uploads in dev/e2e, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/create_artifact_blob_storage.zsh --resource-group <rg>`. The helper creates one StorageV2 account per environment plus the `agent86-artifacts` container by default.
 - To print the storage env values later with the account key redacted, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/print_artifact_blob_env.zsh --resource-group <rg> --account-name <storage-account-name>`. Add `--show-secrets` only when you intentionally need the raw connection string for a local env file.
 - When storing a real `AZURE_BLOB_CONNECTION_STRING` in `.env.api` or `.env.e2e`, wrap the value in single quotes because the local shell loader sources env files directly and Azure connection strings contain semicolons.
+
+Session summary API notes:
+
+- `POST /sessions/{session_id}/summary` always regenerates and overwrites the stored summary for that session.
+- `GET /sessions/{session_id}/summary` returns `404` when no summary has been generated yet.
+- Summary generation uses the configured chat model with tools disabled and stores one summary per session.
 
 The Streamlit UI requires these variables at runtime:
 

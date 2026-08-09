@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     cosmos_sessions_container_name: str = "sessions"
     cosmos_messages_container_name: str = "messages"
     cosmos_artifacts_container_name: str = "artifacts"
+    cosmos_summaries_container_name: str = "summaries"
     cosmos_verify_ssl: bool = True
 
     azure_blob_connection_string: str = Field(min_length=1)
@@ -32,6 +33,10 @@ class Settings(BaseSettings):
     brave_search_api_key: str | None = None
     web_search_timeout_seconds: float = 10.0
     web_search_max_results: int = 5
+    web_search_max_calls_per_request: int = Field(default=1, ge=0)
+    web_search_max_query_length: int = Field(default=200, ge=1)
+    web_search_block_duplicate_queries: bool = True
+    tool_roundtrip_max_per_request: int = Field(default=4, ge=0)
 
     entra_tenant_id: str = Field(min_length=1)
     entra_api_client_id: str = Field(min_length=1)

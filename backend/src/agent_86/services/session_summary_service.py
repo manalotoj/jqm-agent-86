@@ -1,0 +1,208 @@
+from datetime import UTC, datetime
+
+from agent_86.domain.models.artifact import Artifact
+from agent_86.domain.models.message import Message
+from agent_86.domain.models.session_summary import SessionSummary
+from agent_86.domain.schemas.session_summary import ArtifactRef, ChatSessionSummary
+from agent_86.repositories.session_summary_repository import SessionSummaryRepository
+from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.chat_model_service import ChatModelService
+from agent_86.services.message_service import MessageService
+from agent_86.services.session_service import SessionService
+
+
+SUMMARY_SYSTEM_PROMPT = """You are generating a structured summary of a single chat session.
+Return JSON only, matching the required schema exactly.
+Use only the supplied session context.
+Do not call tools, do not invent external facts, and do not mention missing context unless needed in open_questions.
+Generate a concise title based on the session context instead of copying the stored session title.
+artifact refs may include persisted artifacts and meaningful generated outputs or references present in the message history.
+Keep lists concise and useful for later retrieval.
+"""
+
+
+class SessionSummaryNotFoundError(Exception):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"Summary for session '{session_id}' not found")
+        self.session_id = session_id
+
+
+class SessionSummaryService:
+    def __init__(
+        self,
+        repository: SessionSummaryRepository,
+        session_service: SessionService,
+        message_service: MessageService,
+        artifact_service: ArtifactService,
+        chat_model_service: ChatModelService,
+    ) -> None:
+        self._repository = repository
+        self._session_service = session_service
+        self._message_service = message_service
+        self._artifact_service = artifact_service
+        self._chat_model_service = chat_model_service
+
+    async def get_summary(self, user_id: str, session_id: str) -> SessionSummary:
+        summary = await self._repository.get_summary(user_id, session_id)
+        if summary is None:
+            raise SessionSummaryNotFoundError(session_id)
+        return summary
+
+    async def generate_summary(self, user_id: str, session_id: str, model: str) -> SessionSummary | None:
+        session = await self._session_service.get_session(user_id, session_id)
+        if session is None:
+            return None
+
+        messages = await self._message_service.list_messages(user_id, session_id)
+        artifacts = await self._artifact_service.list_artifacts(user_id, session_id)
+
+        generated_summary = await self._chat_model_service.generate_structured_summary(
+            model=model,
+            system_prompt=SUMMARY_SYSTEM_PROMPT,
+            context_payload=self._build_context_payload(session_id=session_id, messages=messages, artifacts=artifacts),
+        )
+
+        summary = SessionSummary(
+            id=self._build_summary_id(session_id),
+            session_id=session_id,
+            user_id=user_id,
+            title=generated_summary.title,
+            date_range_start=generated_summary.date_range_start,
+            date_range_end=generated_summary.date_range_end,
+            one_line_summary=generated_summary.one_line_summary,
+            topics=generated_summary.topics,
+            key_decisions=generated_summary.key_decisions,
+            action_items=generated_summary.action_items,
+            artifacts_generated=self._merge_artifact_refs(generated_summary.artifacts_generated, artifacts),
+            open_questions=generated_summary.open_questions,
+            tools_used=self._merge_tools_used(generated_summary.tools_used, messages),
+            tags=generated_summary.tags,
+        )
+
+        return await self._repository.upsert_summary(summary)
+
+    def _build_summary_id(self, session_id: str) -> str:
+        return f"summary:{session_id}"
+
+    def _build_context_payload(
+        self,
+        *,
+        session_id: str,
+        messages: list[Message],
+        artifacts: list[Artifact],
+    ) -> dict:
+        start = self._first_message_datetime(messages)
+        end = self._last_message_datetime(messages)
+        return {
+            "session_id": session_id,
+            "date_range_start": start.isoformat().replace("+00:00", "Z"),
+            "date_range_end": end.isoformat().replace("+00:00", "Z"),
+            "messages": [
+                {
+                    "role": message.role,
+                    "content": message.content,
+                    "metadata": message.metadata,
+                    "created_at": message.created_at.isoformat().replace("+00:00", "Z")
+                    if message.created_at is not None
+                    else None,
+                }
+                for message in messages
+            ],
+            "persisted_artifacts": [
+                {
+                    "id": artifact.id,
+                    "filename": artifact.filename,
+                    "content_type": artifact.content_type,
+                    "metadata": artifact.metadata,
+                }
+                for artifact in artifacts
+            ],
+        }
+
+    def _merge_tools_used(self, model_tools_used: list[str], messages: list[Message]) -> list[str]:
+        seen: set[str] = set()
+        merged: list[str] = []
+
+        for tool_name in model_tools_used:
+            normalized = tool_name.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                merged.append(normalized)
+
+        for message in messages:
+            tool_name = str(message.metadata.get("tool_name", "")).strip()
+            if tool_name and tool_name not in seen:
+                seen.add(tool_name)
+                merged.append(tool_name)
+
+            tools = message.metadata.get("tools")
+            if isinstance(tools, list):
+                for tool in tools:
+                    normalized = str(tool).strip()
+                    if normalized and normalized not in seen:
+                        seen.add(normalized)
+                        merged.append(normalized)
+
+        return merged
+
+    def _merge_artifact_refs(
+        self,
+        model_artifacts: list[ArtifactRef],
+        persisted_artifacts: list[Artifact],
+    ) -> list[ArtifactRef]:
+        merged: list[ArtifactRef] = []
+        seen: set[tuple[str, str]] = set()
+
+        for artifact_ref in model_artifacts:
+            key = (artifact_ref.name, artifact_ref.location)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(artifact_ref)
+
+        for artifact in persisted_artifacts:
+            ref = ArtifactRef(
+                name=artifact.filename,
+                artifact_type=self._infer_artifact_type(artifact.filename, artifact.content_type),
+                location=artifact.id,
+            )
+            key = (ref.name, ref.location)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(ref)
+
+        return merged
+
+    def _infer_artifact_type(self, filename: str, content_type: str) -> str:
+        lower_name = filename.lower()
+        lower_content_type = content_type.lower()
+        if lower_name.endswith(".docx"):
+            return "docx"
+        if lower_name.endswith(".pptx"):
+            return "pptx"
+        if lower_name.endswith(".xlsx"):
+            return "xlsx"
+        if any(ext in lower_name for ext in (".drawio", ".vsdx", ".mmd", ".svg")):
+            return "diagram"
+        if any(ext in lower_name for ext in (".py", ".ts", ".tsx", ".js", ".json", ".yaml", ".yml", ".md")):
+            return "code"
+        if "officedocument.wordprocessingml" in lower_content_type:
+            return "docx"
+        if "presentationml" in lower_content_type:
+            return "pptx"
+        if "spreadsheetml" in lower_content_type:
+            return "xlsx"
+        return "other"
+
+    def _first_message_datetime(self, messages: list[Message]) -> datetime:
+        timestamps = [message.created_at for message in messages if message.created_at is not None]
+        if timestamps:
+            return min(timestamps)
+        return datetime.now(UTC)
+
+    def _last_message_datetime(self, messages: list[Message]) -> datetime:
+        timestamps = [message.created_at for message in messages if message.created_at is not None]
+        if timestamps:
+            return max(timestamps)
+        return datetime.now(UTC)
