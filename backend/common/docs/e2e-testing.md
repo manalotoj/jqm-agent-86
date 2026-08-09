@@ -26,6 +26,14 @@ Create `backend/.env.e2e` manually. Do **not** commit it. At minimum it should c
 COSMOS_ENDPOINT=https://your-e2e-or-test-account.documents.azure.com:443/
 COSMOS_KEY=replace-with-real-key
 COSMOS_DATABASE_NAME=your-e2e-database-name
+COSMOS_SESSIONS_CONTAINER_NAME=sessions
+COSMOS_MESSAGES_CONTAINER_NAME=messages
+COSMOS_ARTIFACTS_CONTAINER_NAME=artifacts
+
+# REQUIRED: artifact upload/download e2e coverage uses real Azure Blob Storage.
+# This should point at a dedicated dev/e2e storage container, not production.
+AZURE_BLOB_CONNECTION_STRING='replace-with-real-storage-connection-string'
+AZURE_BLOB_CONTAINER_NAME=your-e2e-artifacts-container-name
 
 # Plus the rest of the backend settings required by the app in this environment,
 # for example the Entra and Foundry values already used by the server:
@@ -38,7 +46,15 @@ FOUNDRY_DEFAULT_CHAT_MODEL=...
 FOUNDRY_PREMIUM_CHAT_MODEL=...
 ```
 
-Note: `COSMOS_DATABASE_NAME` is still a required backend setting with `Field(min_length=3)` and no default in `backend/src/agent_86/core/config.py`.
+Notes:
+
+- `COSMOS_DATABASE_NAME` is still a required backend setting with `Field(min_length=3)` and no default in `backend/src/agent_86/core/config.py`.
+- Artifact routes and artifact-backed chat metadata validation require both `AZURE_BLOB_CONNECTION_STRING` and `AZURE_BLOB_CONTAINER_NAME`; if either is missing, the API will fail startup before `/health` succeeds.
+- Because `common/scripts/start_local.zsh` sources env files in zsh, wrap the real `AZURE_BLOB_CONNECTION_STRING` in single quotes so its semicolons are preserved as part of the value.
+- `COSMOS_ARTIFACTS_CONTAINER_NAME` defaults to `artifacts` in code, but setting it explicitly in e2e config avoids ambiguity and makes the dedicated artifacts container visible in environment review.
+- If your e2e Cosmos account only has the `sessions` and `messages` containers, you can provision the missing artifacts metadata container with `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_artifacts_container.zsh --resource-group <rg> --account-name <cosmos-account>`. The helper is idempotent and creates `artifacts` with partition key `/session_id`.
+- To provision a dedicated e2e blob storage account/container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/create_artifact_blob_storage.zsh --resource-group <rg> --environments e2e` (or omit `--environments` to create both `dev` and `e2e`).
+- To print the resulting env values later without exposing the real account key in terminal scrollback or notes, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/print_artifact_blob_env.zsh --resource-group <rg> --account-name <storage-account-name>`. Add `--show-secrets` only when you intentionally need to patch a local `.env.e2e` file.
 
 ## 2. Test-client config: `backend/.env.e2e.client`
 

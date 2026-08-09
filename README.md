@@ -1,6 +1,6 @@
 # agent-86
 
-agent-86 is a local-first, Azure-oriented AI agent backend built with FastAPI. It supports persistent chat sessions, message history stored in Azure Cosmos DB, model routing between default and premium chat models, optional tool use for web search, and Microsoft Entra ID delegated user authentication for both the Streamlit UI and FastAPI API.
+agent-86 is a local-first, Azure-oriented AI agent backend built with FastAPI. It supports persistent chat sessions, message history stored in Azure Cosmos DB, first-class session artifacts stored in Azure Blob Storage with Cosmos-backed metadata, model routing between default and premium chat models, optional tool use for web search, and Microsoft Entra ID delegated user authentication for both the Streamlit UI and FastAPI API.
 
 The repository also includes a Streamlit development UI that signs the user in with Microsoft Entra ID, acquires a delegated access token with OAuth 2.0 Authorization Code Flow, and calls the backend API with `Authorization: Bearer <access_token>`.
 
@@ -9,7 +9,9 @@ The repository also includes a Streamlit development UI that signs the user in w
 - FastAPI backend for chat-oriented workflows
 - Session creation, listing, retrieval, update, and deletion
 - Persistent message history per session
+- Session artifact upload, listing, metadata retrieval, and download
 - Chat endpoint that stores user and assistant messages
+- Minimal chat attachment references via `metadata.artifact_ids`
 - Model routing between configured default and premium models
 - Optional web search tool support during chat
 - Streamlit development UI for local testing
@@ -20,7 +22,8 @@ The repository also includes a Streamlit development UI that signs the user in w
 ## Architecture Summary
 
 - **FastAPI** provides the HTTP API surface and request orchestration
-- **Azure Cosmos DB** stores sessions and messages
+- **Azure Cosmos DB** stores sessions, messages, and artifact metadata
+- **Azure Blob Storage** stores uploaded artifact file contents
 - **Azure OpenAI / Foundry-compatible API access** powers chat completions
 - **Service layer orchestration** keeps routing, chat, and persistence logic separated
 - **Tool abstraction layer** allows the model to invoke tools such as web search
@@ -60,6 +63,7 @@ At a high level, the application works like this:
 
 - Python 3.12+
 - An Azure Cosmos DB account, emulator, or equivalent reachable endpoint
+- An Azure Blob Storage account/container reachable from the backend
 - An Azure OpenAI / Foundry-compatible chat endpoint
 - A Microsoft Entra tenant with two app registrations (UI and backend API)
 - Optional Tavily or Brave Search API key for web search support
@@ -83,7 +87,10 @@ Important settings include:
 - `COSMOS_DATABASE_NAME`
 - `COSMOS_SESSIONS_CONTAINER_NAME`
 - `COSMOS_MESSAGES_CONTAINER_NAME`
+- `COSMOS_ARTIFACTS_CONTAINER_NAME`
 - `COSMOS_VERIFY_SSL`
+- `AZURE_BLOB_CONNECTION_STRING`
+- `AZURE_BLOB_CONTAINER_NAME`
 - `FOUNDRY_OPENAI_BASE_URL`
 - `FOUNDRY_OPENAI_API_KEY`
 - `FOUNDRY_DEFAULT_CHAT_MODEL`
@@ -204,6 +211,10 @@ COSMOS_KEY=your-cosmos-key
 COSMOS_DATABASE_NAME=agent86
 COSMOS_SESSIONS_CONTAINER_NAME=sessions
 COSMOS_MESSAGES_CONTAINER_NAME=messages
+COSMOS_ARTIFACTS_CONTAINER_NAME=artifacts
+
+AZURE_BLOB_CONNECTION_STRING='your-azure-blob-connection-string'
+AZURE_BLOB_CONTAINER_NAME=agent86-artifacts
 
 FOUNDRY_OPENAI_BASE_URL=https://your-foundry-or-openai-endpoint/
 FOUNDRY_OPENAI_API_KEY=your-openai-or-foundry-key
@@ -230,6 +241,25 @@ The backend requires these authentication variables at startup:
 - `ENTRA_TENANT_ID`
 - `ENTRA_API_CLIENT_ID`
 - `ENTRA_API_AUDIENCE`
+
+The backend also requires storage configuration at startup:
+
+- `COSMOS_ENDPOINT`
+- `COSMOS_KEY`
+- `COSMOS_DATABASE_NAME`
+- `AZURE_BLOB_CONNECTION_STRING`
+- `AZURE_BLOB_CONTAINER_NAME`
+
+Artifact behavior notes:
+
+- Artifact binary content is stored in Azure Blob Storage.
+- Artifact metadata is stored in Cosmos DB in a dedicated artifacts container.
+- Chat requests may include `metadata.artifact_ids` to attach previously uploaded session artifacts.
+- Current attachment support validates ownership/session membership and persists normalized artifact IDs on the user message; it does not yet inject artifact file content into model prompts.
+- If a dev or e2e Cosmos account is missing the artifacts metadata container, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/cosmos_db/add_artifacts_container.zsh --resource-group <rg> --account-name <cosmos-account>` to create `artifacts` with partition key `/session_id`.
+- To provision dedicated Azure Blob Storage for artifact uploads in dev/e2e, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/create_artifact_blob_storage.zsh --resource-group <rg>`. The helper creates one StorageV2 account per environment plus the `agent86-artifacts` container by default.
+- To print the storage env values later with the account key redacted, use `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_storage/print_artifact_blob_env.zsh --resource-group <rg> --account-name <storage-account-name>`. Add `--show-secrets` only when you intentionally need the raw connection string for a local env file.
+- When storing a real `AZURE_BLOB_CONNECTION_STRING` in `.env.api` or `.env.e2e`, wrap the value in single quotes because the local shell loader sources env files directly and Azure connection strings contain semicolons.
 
 The Streamlit UI requires these variables at runtime:
 
@@ -404,6 +434,10 @@ Near-term focus areas still include:
 - `docs/decisions.md`
 - `docs/implementation-plan/roadmap.md`
 - `scripts/cosmos_db/local_cosmosdb.zsh`
+- `common/scripts/cosmos_db/add_artifacts_container.zsh`
+- `common/scripts/azure_storage/create_artifact_blob_storage.zsh`
+- `common/scripts/azure_storage/print_artifact_blob_env.zsh`
+- `common/scripts/azure_storage/print_artifact_blob_env.zsh`
 
 ## Status
 
