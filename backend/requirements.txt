@@ -2,6 +2,12 @@ fastapi
 uvicorn[standard]
 pydantic
 pydantic_settings
+structlog
+azure-monitor-opentelemetry
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-asgi
+opentelemetry-instrumentation-httpx
+opentelemetry-instrumentation-requests
 requests
 msal
 openai

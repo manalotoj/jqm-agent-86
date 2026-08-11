@@ -27,6 +27,7 @@ from agent_86.api.dependencies import (
 )
 from agent_86.auth.dependencies import get_token_validator
 from agent_86.domain.schemas.session import CreateSessionRequest
+from agent_86.integrations.bicep.bicep_tool_client import BicepCliNotFoundError
 from agent_86.main import create_app
 from agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
 from agent_86.services.artifact_service import ArtifactService
@@ -329,6 +330,53 @@ async def test_convert_resource_group_to_bicep_stream_emits_error_event_when_con
             events = _parse_sse_events(response)
 
     assert [event["event"] for event in events] == ["start", "error", "done"]
-    assert events[1]["data"] == {"message": "conversion failed"}
+    assert events[1]["data"]["message"] == "conversion failed"
+    assert events[1]["data"]["code"] == "conversion_failed"
+    assert isinstance(events[1]["data"]["correlation_id"], str)
     artifacts = await artifact_service.list_artifacts("user-1", session.id)
     assert artifacts == []
+
+
+@pytest.mark.asyncio
+async def test_convert_resource_group_to_bicep_stream_emits_bicep_cli_missing_error_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app()
+    session_service = SessionService(InMemorySessionRepository())
+    message_service = MessageService(InMemoryMessageRepository())
+    artifact_service = ArtifactService(InMemoryArtifactRepository(), InMemoryBlobStorageService())
+    orchestrator = StubConversionOrchestrator()
+    orchestrator.should_raise = False
+
+    async def raise_bicep_missing(*args, **kwargs):
+        raise BicepCliNotFoundError("Bicep CLI not installed or not on PATH")
+
+    orchestrator.convert_resource_group = raise_bicep_missing
+    token_validator = StubTokenValidator({"valid-user": {"oid": "user-1", "aud": "api://test"}})
+
+    app.dependency_overrides[get_token_validator] = lambda: token_validator
+    app.dependency_overrides[get_session_service] = lambda: session_service
+    app.dependency_overrides[get_message_service] = lambda: message_service
+    app.dependency_overrides[get_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[get_azure_bicep_conversion_orchestrator] = lambda: orchestrator
+
+    session = await session_service.create_session("user-1", CreateSessionRequest(title="Conversion", metadata={}))
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            f"/sessions/{session.id}/azure-bicep-conversion/stream",
+            headers={**auth_header("valid-user"), "Accept": "text/event-stream"},
+            json={
+                "subscription_id": "sub-123",
+                "resource_group_name": "rg-route",
+                "azure_environment": "AzureCloud",
+                "gov_approved_avm_modules": [],
+                "metadata": {},
+            },
+        ) as response:
+            assert response.status_code == 200, response.text
+            events = _parse_sse_events(response)
+
+    assert [event["event"] for event in events] == ["start", "error", "done"]
+    assert events[1]["data"]["message"] == "Bicep CLI not installed or not available to the API process."
+    assert events[1]["data"]["code"] == "bicep_cli_missing"
+    assert isinstance(events[1]["data"]["correlation_id"], str)

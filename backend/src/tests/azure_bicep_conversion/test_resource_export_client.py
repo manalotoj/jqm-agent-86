@@ -149,6 +149,44 @@ async def test_export_resource_group_wildcard_polls_until_template_is_available(
 
 
 @pytest.mark.asyncio
+async def test_export_resource_group_wildcard_tolerates_empty_202_poll_response() -> None:
+    monotonic_values = iter([0.0, 1.0, 2.0, 3.0])
+    transport = SequenceTransport(
+        responses=[
+            httpx.Response(202, headers={"Azure-AsyncOperation": "https://management.azure.com/operations/123"}),
+            httpx.Response(202, headers={"Retry-After": "1"}, content=b""),
+            httpx.Response(200, json={"status": "Succeeded", "template": {"resources": [{"name": "done"}]}}),
+        ]
+    )
+    sleep = RecordingSleep()
+    client = _build_client(transport=transport, sleep=sleep, monotonic=lambda: next(monotonic_values))
+
+    result = await client.export_resource_group_wildcard(subscription_id="sub-1", resource_group_name="rg-1")
+
+    assert result.template_json == {"resources": [{"name": "done"}]}
+    assert sleep.calls == [1.0]
+    await client._http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_export_resource_group_wildcard_raises_clear_error_for_non_json_terminal_poll_response() -> None:
+    monotonic_values = iter([0.0, 1.0])
+    transport = SequenceTransport(
+        responses=[
+            httpx.Response(202, headers={"Azure-AsyncOperation": "https://management.azure.com/operations/123"}),
+            httpx.Response(200, headers={"Content-Type": "text/html"}, text="<html>gateway error</html>"),
+        ]
+    )
+    sleep = RecordingSleep()
+    client = _build_client(transport=transport, sleep=sleep, monotonic=lambda: next(monotonic_values))
+
+    with pytest.raises(ResourceExportError, match="non-JSON response"):
+        await client.export_resource_group_wildcard(subscription_id="sub-1", resource_group_name="rg-1")
+
+    await client._http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_export_resource_group_wildcard_raises_timeout_when_polling_exceeds_deadline() -> None:
     monotonic_values = iter([0.0, 6.0])
     transport = SequenceTransport(

@@ -5,6 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent_86.api.router import router
 from agent_86.core.config import get_settings
 from agent_86.core.errors import ConfigurationError
+from agent_86.core.logging import configure_logging, get_logger
+from agent_86.core.telemetry import configure_telemetry
+
+
+logger = get_logger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -12,6 +17,9 @@ def create_app() -> FastAPI:
         settings = get_settings()
     except ConfigurationError as exc:
         raise SystemExit(str(exc)) from None
+
+    configure_logging(settings)
+    configure_telemetry(settings)
 
     app = FastAPI(title=settings.app_name)
     if settings.cors_allowed_origins_list:
@@ -23,6 +31,7 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
     app.include_router(router)
+    logger.info("app_created", app_name=settings.app_name, app_env=settings.app_env)
     return app
 
 

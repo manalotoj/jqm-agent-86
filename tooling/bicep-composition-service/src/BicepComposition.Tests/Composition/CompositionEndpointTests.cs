@@ -57,7 +57,7 @@ public sealed class CompositionEndpointTests : IClassFixture<WebApplicationFacto
         Assert.Equal("ast", payload.MergeMode);
         Assert.Equal(2, payload.Files.Count);
         Assert.Equal("main.bicep", payload.Files[0].Path);
-        Assert.Equal("modules/fragment_001.bicep", payload.Files[1].Path);
+        Assert.Equal("modules/fragment_001_storage.bicep", payload.Files[1].Path);
         Assert.Equal(1, payload.Stats.FragmentCount);
         Assert.Equal(payload.Stats.UnresolvedReferenceCount, payload.UnresolvedReferences.Count);
         Assert.Single(payload.UnresolvedReferences);

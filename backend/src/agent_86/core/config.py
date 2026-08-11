@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     app_name: str = "agent-86"
     app_env: str = "dev"
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    log_level: str = "INFO"
+    log_json: bool = True
+    applicationinsights_connection_string: str | None = None
+    otel_service_name: str = "agent-86-api"
+    otel_service_version: str | None = None
+    otel_environment: str | None = None
 
     cosmos_endpoint: str
     cosmos_key: str
@@ -38,6 +44,7 @@ class Settings(BaseSettings):
     web_search_block_duplicate_queries: bool = True
     tool_roundtrip_max_per_request: int = Field(default=4, ge=0)
     bicep_composition_base_url: str = "http://127.0.0.1:5057"
+    bicep_cli_path: str | None = None
 
     entra_tenant_id: str = Field(min_length=1)
     entra_api_client_id: str = Field(min_length=1)

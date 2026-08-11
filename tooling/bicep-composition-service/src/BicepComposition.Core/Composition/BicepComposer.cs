@@ -4,11 +4,14 @@ using Bicep.Core.Diagnostics;
 using Bicep.Core.Parsing;
 using Bicep.Core.Syntax;
 using Bicep.Core.Text;
+using Microsoft.Extensions.Logging;
 
 namespace BicepComposition.Core.Composition;
 
 public sealed class BicepComposer
 {
+    private readonly ILogger<BicepComposer> _logger;
+
     private static readonly Regex DeclarationRegex = new(
         "^(?<indent>\\s*)(?<kind>param|var|resource)\\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\\b",
         RegexOptions.Compiled);
@@ -21,21 +24,54 @@ public sealed class BicepComposer
         "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
         RegexOptions.Compiled);
 
+    private static readonly Regex ResourceTypeRegex = new(
+        "resource\\s+[A-Za-z_][A-Za-z0-9_]*\\s+'(?<type>[^'@]+)@[^']+'",
+        RegexOptions.Compiled);
+
+    public BicepComposer(ILogger<BicepComposer> logger)
+    {
+        _logger = logger;
+    }
+
     public ComposeResult Compose(IReadOnlyCollection<ComposeInputFragment> fragments)
     {
         ArgumentNullException.ThrowIfNull(fragments);
 
         var orderedFragments = fragments.OrderBy(fragment => fragment.BatchIndex).ToArray();
+        _logger.LogInformation(
+            "Starting Bicep composition for {FragmentCount} fragments with batch indices {BatchIndices}.",
+            orderedFragments.Length,
+            orderedFragments.Select(fragment => fragment.BatchIndex).ToArray());
+
         var files = new List<ComposeOutputFile>();
         var warnings = new List<string>();
         var unresolvedReferences = new List<ComposeUnresolvedReference>();
         var deduplicatedParams = 0;
         var deduplicatedVars = 0;
         var knownResourceIds = BuildKnownResourceIds(orderedFragments);
+        var emittedModules = new List<ComposedModule>();
+
+        _logger.LogDebug(
+            "Built known resource id set for composition with {KnownResourceIdCount} resource ids.",
+            knownResourceIds.Count);
 
         foreach (var fragment in orderedFragments)
         {
-            warnings.AddRange(CollectCompilerDiagnostics(fragment, fragment.BicepText, "input"));
+            _logger.LogInformation(
+                "Composing fragment {BatchIndex} with {SourceResourceIdCount} source resource ids and {CharacterCount} characters.",
+                fragment.BatchIndex,
+                fragment.SourceResourceIds.Count,
+                fragment.BicepText.Length);
+
+            var inputDiagnostics = CollectCompilerDiagnostics(fragment, fragment.BicepText, "input");
+            warnings.AddRange(inputDiagnostics);
+            if (inputDiagnostics.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Fragment {BatchIndex} produced {DiagnosticCount} input compiler diagnostics before transformation.",
+                    fragment.BatchIndex,
+                    inputDiagnostics.Count);
+            }
 
             var transformed = TransformFragment(
                 fragment,
@@ -45,12 +81,49 @@ public sealed class BicepComposer
                 ref deduplicatedParams,
                 ref deduplicatedVars);
 
-            warnings.AddRange(CollectCompilerDiagnostics(fragment, transformed, "output"));
+            var outputDiagnostics = CollectCompilerDiagnostics(fragment, transformed, "output");
+            warnings.AddRange(outputDiagnostics);
+            if (outputDiagnostics.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Fragment {BatchIndex} produced {DiagnosticCount} output compiler diagnostics after transformation.",
+                    fragment.BatchIndex,
+                    outputDiagnostics.Count);
+            }
 
-            files.Add(new ComposeOutputFile($"modules/fragment_{fragment.BatchIndex:000}.bicep", transformed));
+            var partitionedModules = PartitionFragmentModules(fragment, transformed);
+            emittedModules.AddRange(partitionedModules);
+            foreach (var module in partitionedModules)
+            {
+                files.Add(new ComposeOutputFile(module.Path, module.Content));
+            }
+
+            _logger.LogInformation(
+                "Emitted {ModuleCount} transformed fragment modules for batch {BatchIndex}.",
+                partitionedModules.Count,
+                fragment.BatchIndex);
         }
 
-        files.Insert(0, new ComposeOutputFile("main.bicep", BuildMainFile(orderedFragments)));
+        var mainFileContent = BuildMainFile(emittedModules);
+        files.Insert(0, new ComposeOutputFile("main.bicep", mainFileContent));
+
+        var generatedFilePaths = files.Select(file => file.Path).ToArray();
+        var mainFilePreview = CreateContentPreview(mainFileContent);
+        var mainFileIsModuleWrapper = mainFileContent.Contains("module fragment_", StringComparison.Ordinal);
+
+        _logger.LogInformation(
+            "Generated composed package with files {GeneratedFilePaths}. MainFileIsModuleWrapper={MainFileIsModuleWrapper}. MainFilePreview={MainFilePreview}",
+            generatedFilePaths,
+            mainFileIsModuleWrapper,
+            mainFilePreview);
+
+        _logger.LogInformation(
+            "Completed Bicep composition. Files={FileCount}, Warnings={WarningCount}, UnresolvedReferences={UnresolvedReferenceCount}, DeduplicatedParams={DeduplicatedParams}, DeduplicatedVars={DeduplicatedVars}.",
+            files.Count,
+            warnings.Count,
+            unresolvedReferences.Count,
+            deduplicatedParams,
+            deduplicatedVars);
 
         return new ComposeResult(
             Status: "ok",
@@ -238,6 +311,14 @@ public sealed class BicepComposer
             {
                 ParameterDeclarationSyntax parameter => CreateSyntaxDeclaration("param", parameter.Name.IdentifierName, parameter.Span, normalizedText, lineStarts),
                 VariableDeclarationSyntax variable => CreateSyntaxDeclaration("var", variable.Name.IdentifierName, variable.Span, normalizedText, lineStarts),
+                OutputDeclarationSyntax output => CreateSyntaxDeclaration("output", output.Name.IdentifierName, output.Span, normalizedText, lineStarts),
+                ResourceDeclarationSyntax resource => CreateSyntaxDeclaration(
+                    "resource",
+                    resource.Name.IdentifierName,
+                    resource.Span,
+                    normalizedText,
+                    lineStarts,
+                    ExtractResourceType(normalizedText.Substring(resource.Span.Position, resource.Span.Length))),
                 _ => null,
             };
 
@@ -253,7 +334,10 @@ public sealed class BicepComposer
             }
         }
 
-        return new ParsedDeclarations(startLines, coveredLines);
+        return new ParsedDeclarations(
+            startLines,
+            coveredLines,
+            startLines.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToArray());
     }
 
     private static SyntaxDeclaration? CreateSyntaxDeclaration(
@@ -261,7 +345,8 @@ public sealed class BicepComposer
         string name,
         TextSpan span,
         string normalizedText,
-        IReadOnlyList<int> lineStarts)
+        IReadOnlyList<int> lineStarts,
+        string? resourceType = null)
     {
         if (span.Position < 0 || span.Position + span.Length > normalizedText.Length)
         {
@@ -291,6 +376,7 @@ public sealed class BicepComposer
             Name: name,
             Text: text,
             Body: text[bodyStart..].Trim(),
+            ResourceType: resourceType,
             StartLine: startLine,
             EndLine: endLine);
     }
@@ -605,22 +691,135 @@ public sealed class BicepComposer
             line.AsSpan(match.Index + match.Length));
     }
 
-    private static string BuildMainFile(IEnumerable<ComposeInputFragment> orderedFragments)
+    private static IReadOnlyCollection<ComposedModule> PartitionFragmentModules(ComposeInputFragment fragment, string transformed)
+    {
+        var parsedDeclarations = ParseTopLevelDeclarations(transformed.Replace("\r\n", "\n", StringComparison.Ordinal));
+        var sharedDeclarations = new List<string>();
+        var domainDeclarations = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var declaration in parsedDeclarations.OrderedDeclarations)
+        {
+            if (string.Equals(declaration.Kind, "resource", StringComparison.Ordinal))
+            {
+                var domain = DetermineDomainName(declaration.ResourceType);
+                if (!domainDeclarations.TryGetValue(domain, out var declarations))
+                {
+                    declarations = new List<string>();
+                    domainDeclarations[domain] = declarations;
+                }
+
+                declarations.Add(declaration.Text.Trim());
+            }
+            else
+            {
+                sharedDeclarations.Add(declaration.Text.Trim());
+            }
+        }
+
+        var modules = new List<ComposedModule>();
+        if (domainDeclarations.Count == 0 && sharedDeclarations.Count > 0)
+        {
+            modules.Add(new ComposedModule(
+                $"fragment_{fragment.BatchIndex:000}_shared",
+                $"modules/fragment_{fragment.BatchIndex:000}_shared.bicep",
+                string.Join(Environment.NewLine + Environment.NewLine, sharedDeclarations) + Environment.NewLine));
+        }
+
+        foreach (var pair in domainDeclarations.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var moduleDeclarations = sharedDeclarations.Count > 0
+                ? sharedDeclarations.Concat(pair.Value)
+                : pair.Value;
+
+            modules.Add(new ComposedModule(
+                $"fragment_{fragment.BatchIndex:000}_{pair.Key}",
+                $"modules/fragment_{fragment.BatchIndex:000}_{pair.Key}.bicep",
+                string.Join(Environment.NewLine + Environment.NewLine, moduleDeclarations) + Environment.NewLine));
+        }
+
+        if (modules.Count == 0)
+        {
+            modules.Add(new ComposedModule(
+                $"fragment_{fragment.BatchIndex:000}_misc",
+                $"modules/fragment_{fragment.BatchIndex:000}_misc.bicep",
+                transformed));
+        }
+
+        return modules;
+    }
+
+    private static string BuildMainFile(IEnumerable<ComposedModule> modules)
     {
         var builder = new StringBuilder();
         builder.AppendLine("// Composed Bicep package.");
         builder.AppendLine();
 
-        foreach (var fragment in orderedFragments)
+        foreach (var module in modules)
         {
-            var modulePath = $"modules/fragment_{fragment.BatchIndex:000}.bicep";
-            builder.AppendLine($"module fragment_{fragment.BatchIndex:000} './{modulePath}' = {{");
-            builder.AppendLine($"  name: 'fragment-{fragment.BatchIndex:000}'");
+            builder.AppendLine($"module {module.SymbolicName} './{module.Path}' = {{");
+            builder.AppendLine($"  name: '{module.SymbolicName.Replace('_', '-')}'");
             builder.AppendLine("}");
             builder.AppendLine();
         }
 
         return builder.ToString();
+    }
+
+    private static string? ExtractResourceType(string declarationText)
+    {
+        var match = ResourceTypeRegex.Match(declarationText);
+        return match.Success ? match.Groups["type"].Value : null;
+    }
+
+    private static string DetermineDomainName(string? resourceType)
+    {
+        if (string.IsNullOrWhiteSpace(resourceType))
+        {
+            return "misc";
+        }
+
+        if (resourceType.StartsWith("Microsoft.Storage/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "storage";
+        }
+
+        if (resourceType.StartsWith("Microsoft.Web/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "web";
+        }
+
+        if (resourceType.StartsWith("Microsoft.KeyVault/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "keyvault";
+        }
+
+        if (resourceType.StartsWith("Microsoft.Insights/", StringComparison.OrdinalIgnoreCase)
+            || resourceType.StartsWith("Microsoft.AlertsManagement/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "monitoring";
+        }
+
+        var provider = resourceType.Split('/')[0];
+        return provider.Replace("Microsoft.", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace('.', '_')
+            .ToLowerInvariant();
+    }
+
+    private static string CreateContentPreview(string content)
+    {
+        const int maxPreviewLength = 240;
+
+        var normalized = content
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+
+        if (normalized.Length <= maxPreviewLength)
+        {
+            return normalized;
+        }
+
+        return normalized[..maxPreviewLength] + "...";
     }
 
     private static IReadOnlyCollection<string> CollectCompilerDiagnostics(
@@ -655,15 +854,19 @@ public sealed class BicepComposer
 
     private sealed record ParsedDeclarations(
         Dictionary<int, SyntaxDeclaration> StartLines,
-        HashSet<int> CoveredLines);
+        HashSet<int> CoveredLines,
+        IReadOnlyList<SyntaxDeclaration> OrderedDeclarations);
 
     private sealed record SyntaxDeclaration(
         string Kind,
         string Name,
         string Text,
         string Body,
+        string? ResourceType,
         int StartLine,
         int EndLine);
+
+    private sealed record ComposedModule(string SymbolicName, string Path, string Content);
 }
 
 public sealed record ComposeInputFragment(

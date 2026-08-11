@@ -234,7 +234,7 @@ async def test_orchestrator_falls_back_immediately_when_compose_raises() -> None
     assert result.summary.fallback_used is True
     assert result.summary.generated_files == ["main.bicep", "modules/fragment_000.bicep"]
     assert (
-        "Composition sidecar failed during compose; using fallback package instead: composition failed"
+        "Composition sidecar failed during compose; using fallback package instead: RuntimeError: composition failed"
         in result.summary.diagnostics
     )
     assert "AST composition was unavailable; generated a low-fidelity text fallback package." in result.summary.diagnostics

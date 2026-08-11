@@ -2,13 +2,21 @@ import asyncio
 import json
 import shutil
 import tempfile
+import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol
+from typing import Callable, Protocol
+
+from agent_86.core.logging import get_logger
 
 
 class BicepToolError(RuntimeError):
     """Raised when direct Bicep CLI execution fails."""
+
+
+class BicepCliNotFoundError(BicepToolError):
+    """Raised when the Bicep CLI executable cannot be resolved."""
 
 
 @dataclass(frozen=True)
@@ -50,26 +58,34 @@ class BicepToolClient:
         self._command_runner = command_runner or _run_subprocess
         self._tempdir_factory = tempdir_factory or (lambda: tempfile.TemporaryDirectory(prefix="agent86-bicep-"))
         self._which = which or shutil.which
+        self._logger = get_logger(__name__).bind(configured_executable=executable)
 
     async def ping(self) -> bool:
-        if self._which(self._executable) is None:
-            return False
-        try:
-            result = await self._command_runner([self._executable, "--version"], cwd=str(Path.cwd()))
-        except Exception:
-            return False
-        return result.returncode == 0
+        with suppress(BicepCliNotFoundError):
+            executable = self._resolve_executable(raise_if_missing=True)
+            try:
+                result = await self._run_command(
+                    [executable, "--version"],
+                    cwd=str(Path.cwd()),
+                    action="ping Bicep CLI",
+                )
+            except Exception:
+                return False
+            return result.returncode == 0
+        return False
 
     async def decompile_arm_template(self, *, template_json: dict, logical_name: str) -> str:
+        executable = self._resolve_executable()
         with self._tempdir_factory() as workspace:
             workspace_path = Path(workspace)
             template_path = workspace_path / f"{logical_name}.json"
             bicep_path = workspace_path / f"{logical_name}.bicep"
             template_path.write_text(json.dumps(template_json, indent=2), encoding="utf-8")
 
-            result = await self._command_runner(
-                [self._executable, "decompile", "--file", template_path.name],
+            result = await self._run_command(
+                [executable, "decompile", template_path.name],
                 cwd=str(workspace_path),
+                action="decompile ARM template",
             )
             _raise_for_failed_command(result=result, action="decompile ARM template")
 
@@ -80,14 +96,16 @@ class BicepToolClient:
             return _normalize_bicep_text(bicep_path.read_text(encoding="utf-8"))
 
     async def format_bicep(self, *, bicep_text: str, logical_name: str) -> str:
+        executable = self._resolve_executable()
         with self._tempdir_factory() as workspace:
             workspace_path = Path(workspace)
             bicep_path = workspace_path / f"{logical_name}.bicep"
             bicep_path.write_text(bicep_text, encoding="utf-8")
 
-            result = await self._command_runner(
-                [self._executable, "format", "--file", bicep_path.name, "--stdout"],
+            result = await self._run_command(
+                [executable, "format", bicep_path.name, "--stdout"],
                 cwd=str(workspace_path),
+                action="format Bicep",
             )
             _raise_for_failed_command(result=result, action="format Bicep")
 
@@ -96,19 +114,67 @@ class BicepToolClient:
             return _normalize_bicep_text(bicep_path.read_text(encoding="utf-8"))
 
     async def get_diagnostics(self, *, bicep_text: str, logical_name: str) -> BicepDiagnosticsResult:
+        executable = self._resolve_executable()
         with self._tempdir_factory() as workspace:
             workspace_path = Path(workspace)
             bicep_path = workspace_path / f"{logical_name}.bicep"
             bicep_path.write_text(bicep_text, encoding="utf-8")
 
-            result = await self._command_runner(
-                [self._executable, "build", "--file", bicep_path.name, "--stdout"],
+            result = await self._run_command(
+                [executable, "build", bicep_path.name, "--stdout"],
                 cwd=str(workspace_path),
+                action="collect Bicep diagnostics",
             )
             diagnostics = _parse_bicep_diagnostics(stderr=result.stderr, default_file_path=bicep_path.name)
             if result.returncode not in {0, 1}:
                 _raise_for_failed_command(result=result, action="collect Bicep diagnostics")
             return BicepDiagnosticsResult(diagnostics=diagnostics)
+
+    def _resolve_executable(self, *, raise_if_missing: bool = True) -> str:
+        candidates = [self._executable]
+        if self._executable == "bicep":
+            candidates.append(str(Path.home() / ".azure" / "bin" / "bicep"))
+
+        for candidate in candidates:
+            if Path(candidate).is_absolute():
+                resolved = candidate if Path(candidate).exists() else None
+            else:
+                resolved = self._which(candidate)
+            if resolved:
+                return resolved
+
+        message = "Bicep CLI not installed or not on PATH"
+        self._logger.error("bicep_cli_missing", candidates=candidates)
+        if raise_if_missing:
+            raise BicepCliNotFoundError(message)
+        return self._executable
+
+    async def _run_command(self, command: list[str], *, cwd: str, action: str) -> BicepCommandResult:
+        started = time.perf_counter()
+        self._logger.info("bicep_command_started", action=action, command=command, cwd=cwd)
+        try:
+            result = await self._command_runner(command, cwd=cwd)
+        except FileNotFoundError as exc:
+            self._logger.exception(
+                "bicep_command_failed_missing_executable",
+                action=action,
+                command=command,
+                cwd=cwd,
+            )
+            raise BicepCliNotFoundError("Bicep CLI not installed or not on PATH") from exc
+
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        self._logger.info(
+            "bicep_command_completed",
+            action=action,
+            command=command,
+            cwd=cwd,
+            returncode=result.returncode,
+            duration_ms=duration_ms,
+            stdout_preview=_preview_output(result.stdout),
+            stderr_preview=_preview_output(result.stderr),
+        )
+        return result
 
 
 async def _run_subprocess(command: list[str], *, cwd: str) -> BicepCommandResult:
@@ -131,6 +197,13 @@ def _raise_for_failed_command(*, result: BicepCommandResult, action: str) -> Non
         return
     details = result.stderr.strip() or result.stdout.strip() or "no command output"
     raise BicepToolError(f"Failed to {action}: {details}")
+
+
+def _preview_output(value: str, *, limit: int = 500) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def _normalize_bicep_text(bicep_text: str) -> str:

@@ -7,6 +7,7 @@ import pytest
 
 from agent_86.integrations.bicep.bicep_tool_client import (
     BicepCommandResult,
+    BicepCliNotFoundError,
     BicepDiagnostic,
     BicepToolClient,
     BicepToolError,
@@ -44,21 +45,39 @@ async def test_ping_returns_true_when_bicep_cli_is_available() -> None:
     client = BicepToolClient(command_runner=runner, which=lambda _: "/usr/local/bin/bicep")
 
     assert await client.ping() is True
-    assert runner.commands == [(["bicep", "--version"], str(Path.cwd()))]
+    assert runner.commands == [(["/usr/local/bin/bicep", "--version"], str(Path.cwd()))]
+
+
+@pytest.mark.asyncio
+async def test_ping_returns_true_when_azure_cli_managed_bicep_exists() -> None:
+    runner = RecordingRunner(results=[BicepCommandResult(returncode=0, stdout="Bicep CLI version 0.45.15")])
+
+    def fake_which(value: str) -> str | None:
+        if value == "bicep":
+            return None
+        if value.endswith("/.azure/bin/bicep"):
+            return value
+        return None
+
+    client = BicepToolClient(command_runner=runner, which=fake_which)
+
+    assert await client.ping() is True
+    assert runner.commands[0][0][0].endswith("/.azure/bin/bicep")
 
 
 @pytest.mark.asyncio
 async def test_decompile_arm_template_reads_output_file_from_isolated_workspace() -> None:
     tempdirs = RecordingTempdirFactory()
+    executable_path = str(Path.home() / ".azure" / "bin" / "bicep")
 
     def write_output(*, command: list[str], cwd: str) -> None:
-        assert command == ["bicep", "decompile", "--file", "rg-001.json"]
+        assert command == [executable_path, "decompile", "rg-001.json"]
         workspace = Path(cwd)
         assert (workspace / "rg-001.json").exists()
         (workspace / "rg-001.bicep").write_text("resource stg 'Type@1' = {}", encoding="utf-8")
 
     runner = RecordingRunner(results=[BicepCommandResult(returncode=0)], callback=write_output)
-    client = BicepToolClient(command_runner=runner, tempdir_factory=tempdirs)
+    client = BicepToolClient(command_runner=runner, tempdir_factory=tempdirs, which=lambda value: executable_path if value == "bicep" else None)
 
     result = await client.decompile_arm_template(template_json={"resources": []}, logical_name="rg-001")
 
@@ -69,19 +88,21 @@ async def test_decompile_arm_template_reads_output_file_from_isolated_workspace(
 @pytest.mark.asyncio
 async def test_format_bicep_prefers_stdout_output() -> None:
     tempdirs = RecordingTempdirFactory()
+    executable_path = "/usr/local/bin/bicep"
     runner = RecordingRunner(results=[BicepCommandResult(returncode=0, stdout="param location string = 'eastus'\n")])
-    client = BicepToolClient(command_runner=runner, tempdir_factory=tempdirs)
+    client = BicepToolClient(command_runner=runner, tempdir_factory=tempdirs, which=lambda _: executable_path)
 
     result = await client.format_bicep(bicep_text="param location string='eastus'", logical_name="main")
 
     assert result == "param location string = 'eastus'\n"
     command, cwd = runner.commands[0]
-    assert command == ["bicep", "format", "--file", "main.bicep", "--stdout"]
+    assert command == [executable_path, "format", "main.bicep", "--stdout"]
     assert not Path(cwd).exists()
 
 
 @pytest.mark.asyncio
 async def test_get_diagnostics_parses_warning_and_error_lines() -> None:
+    executable_path = "/usr/local/bin/bicep"
     runner = RecordingRunner(
         results=[
             BicepCommandResult(
@@ -93,7 +114,7 @@ async def test_get_diagnostics_parses_warning_and_error_lines() -> None:
             )
         ]
     )
-    client = BicepToolClient(command_runner=runner)
+    client = BicepToolClient(command_runner=runner, which=lambda _: executable_path)
 
     result = await client.get_diagnostics(bicep_text="resource bad 'Type@1' = {}", logical_name="main")
 
@@ -105,8 +126,9 @@ async def test_get_diagnostics_parses_warning_and_error_lines() -> None:
 
 @pytest.mark.asyncio
 async def test_get_diagnostics_raises_for_non_diagnostic_command_failure() -> None:
+    executable_path = "/usr/local/bin/bicep"
     runner = RecordingRunner(results=[BicepCommandResult(returncode=2, stderr="fatal: CLI crashed")])
-    client = BicepToolClient(command_runner=runner)
+    client = BicepToolClient(command_runner=runner, which=lambda _: executable_path)
 
     with pytest.raises(BicepToolError, match="collect Bicep diagnostics"):
         await client.get_diagnostics(bicep_text="param location string", logical_name="main")
@@ -114,8 +136,17 @@ async def test_get_diagnostics_raises_for_non_diagnostic_command_failure() -> No
 
 @pytest.mark.asyncio
 async def test_decompile_arm_template_raises_with_stderr_details() -> None:
+    executable_path = "/usr/local/bin/bicep"
     runner = RecordingRunner(results=[BicepCommandResult(returncode=1, stderr="decompile failed badly")])
-    client = BicepToolClient(command_runner=runner)
+    client = BicepToolClient(command_runner=runner, which=lambda _: executable_path)
 
     with pytest.raises(BicepToolError, match="decompile ARM template: decompile failed badly"):
+        await client.decompile_arm_template(template_json={"resources": []}, logical_name="main")
+
+
+@pytest.mark.asyncio
+async def test_decompile_arm_template_raises_specific_error_when_bicep_cli_missing() -> None:
+    client = BicepToolClient(executable="/path/to/missing/bicep", which=lambda _: None)
+
+    with pytest.raises(BicepCliNotFoundError, match="Bicep CLI not installed or not on PATH"):
         await client.decompile_arm_template(template_json={"resources": []}, logical_name="main")

@@ -126,3 +126,37 @@ async def test_export_pipeline_requires_resource_ids_for_batched_export_mode() -
             wildcard_export_resource_limit=2,
             batch_size=2,
         )
+
+
+@pytest.mark.asyncio
+async def test_export_pipeline_excludes_known_generated_resource_ids_before_batched_export() -> None:
+    resource_ids = [
+        "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Storage/storageAccounts/stg1",
+        "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Storage/storageAccounts/stg1/blobServices/default",
+        "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Authorization/roleAssignments/abcd",
+        "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Web/sites/app1",
+    ]
+    client = RecordingResourceExportClient(
+        resource_count=4,
+        wildcard_template=ResourceExportTemplate(
+            template_json={"resources": ["storage", "web"]},
+            export_mode="wildcard",
+            source_resource_ids=[],
+        ),
+    )
+    pipeline = ExportPipeline(client)
+
+    plan, fragments = await pipeline.export_resource_group(
+        subscription_id="sub-1",
+        resource_group_name="rg-1",
+        resource_ids=resource_ids,
+        wildcard_export_resource_limit=2,
+        batch_size=2,
+    )
+
+    assert plan.export_mode == "wildcard"
+    assert plan.batches == [plan.batches[0]]
+    assert client.by_id_calls == []
+    assert client.wildcard_calls == [("sub-1", "rg-1")]
+    assert len(fragments) == 1
+    assert any("Excluded known generated/default resource IDs before export" in warning for warning in plan.warnings)

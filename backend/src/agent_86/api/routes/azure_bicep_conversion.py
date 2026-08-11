@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -20,12 +21,15 @@ from agent_86.domain.schemas.azure_bicep_conversion import (
     BicepConversionSummaryResponse,
     ConvertResourceGroupToBicepRequest,
 )
+from agent_86.integrations.bicep.bicep_tool_client import BicepCliNotFoundError
+from agent_86.core.logging import get_logger
 from agent_86.services.artifact_service import ArtifactService, MessageNotFoundError
 from agent_86.services.azure_bicep_conversion.orchestrator import AzureBicepConversionOrchestrator
 from agent_86.services.message_service import MessageService
 from agent_86.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions/{session_id}/azure-bicep-conversion", tags=["azure-bicep-conversion"])
+logger = get_logger(__name__)
 
 
 def _to_artifact_descriptor(artifact: Artifact) -> BicepConversionArtifactDescriptor:
@@ -67,8 +71,18 @@ async def convert_resource_group_to_bicep_stream(
     orchestrator: AzureBicepConversionOrchestrator = Depends(get_azure_bicep_conversion_orchestrator),
 ) -> StreamingResponse:
     await ensure_session_exists(user.user_id, session_id, session_service)
+    correlation_id = str(uuid4())
 
     async def event_generator() -> AsyncIterator[str]:
+        bound_logger = logger.bind(
+            correlation_id=correlation_id,
+            session_id=session_id,
+            user_id=user.user_id,
+            subscription_id=request.subscription_id,
+            resource_group_name=request.resource_group_name,
+            azure_environment=request.azure_environment,
+        )
+        bound_logger.info("azure_bicep_conversion_stream_started")
         yield encode_sse(
             to_stream_event(
                 "start",
@@ -105,12 +119,51 @@ async def convert_resource_group_to_bicep_stream(
                 artifact=_to_artifact_descriptor(artifact),
                 summary=_to_summary_response(conversion_result.summary),
             )
+            bound_logger.info(
+                "azure_bicep_conversion_stream_completed",
+                artifact_id=artifact.id,
+                generated_files=conversion_result.summary.generated_files,
+                fallback_used=conversion_result.summary.fallback_used,
+            )
             yield encode_sse(to_stream_event("complete", complete_event.model_dump(mode="json")))
         except MessageNotFoundError as exc:
-            yield encode_sse(to_stream_event("error", {"message": str(exc)}))
+            bound_logger.warning("azure_bicep_conversion_stream_message_not_found", error=str(exc))
+            yield encode_sse(
+                to_stream_event(
+                    "error",
+                    {
+                        "message": str(exc),
+                        "code": "message_not_found",
+                        "correlation_id": correlation_id,
+                    },
+                )
+            )
+        except BicepCliNotFoundError:
+            bound_logger.exception("azure_bicep_conversion_stream_bicep_cli_missing")
+            yield encode_sse(
+                to_stream_event(
+                    "error",
+                    {
+                        "message": "Bicep CLI not installed or not available to the API process.",
+                        "code": "bicep_cli_missing",
+                        "correlation_id": correlation_id,
+                    },
+                )
+            )
         except Exception as exc:
-            yield encode_sse(to_stream_event("error", {"message": str(exc)}))
+            bound_logger.exception("azure_bicep_conversion_stream_failed")
+            yield encode_sse(
+                to_stream_event(
+                    "error",
+                    {
+                        "message": str(exc),
+                        "code": "conversion_failed",
+                        "correlation_id": correlation_id,
+                    },
+                )
+            )
         finally:
+            bound_logger.info("azure_bicep_conversion_stream_done")
             yield encode_sse(to_stream_event("done", {}))
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

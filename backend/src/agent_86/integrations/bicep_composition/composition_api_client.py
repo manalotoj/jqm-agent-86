@@ -3,6 +3,8 @@ from typing import Any
 
 import httpx
 
+from agent_86.core.logging import get_logger
+
 
 class CompositionApiError(RuntimeError):
     """Raised when the local composition sidecar cannot be reached or returns invalid data."""
@@ -59,6 +61,8 @@ class CompositionResult:
 class CompositionApiClient:
     """Boundary for the local .NET Bicep composition service."""
 
+    _MAX_ERROR_BODY_LENGTH = 500
+
     def __init__(
         self,
         *,
@@ -68,15 +72,29 @@ class CompositionApiClient:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http_client = http_client or httpx.AsyncClient(timeout=request_timeout_seconds)
+        self._logger = get_logger(__name__)
 
     async def check_health(self) -> bool:
         try:
+            self._logger.info("composition_sidecar_health_check_started", base_url=self._base_url)
             response = await self._http_client.get(f"{self._base_url}/health")
             response.raise_for_status()
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError) as exc:
+            self._logger.warning(
+                "composition_sidecar_health_check_failed",
+                base_url=self._base_url,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return False
 
         payload = response.json()
+        self._logger.info(
+            "composition_sidecar_health_check_succeeded",
+            base_url=self._base_url,
+            response_status=response.status_code,
+            reported_status=payload.get("status"),
+        )
         return bool(payload.get("status"))
 
     async def compose(self, *, request: CompositionRequest) -> CompositionResult:
@@ -96,14 +114,57 @@ class CompositionApiClient:
         }
 
         try:
+            self._logger.info(
+                "composition_sidecar_compose_started",
+                base_url=self._base_url,
+                subscription_id=request.subscription_id,
+                resource_group_name=request.resource_group_name,
+                fragment_count=len(request.fragments),
+            )
             response = await self._http_client.post(f"{self._base_url}/compose", json=payload)
             response.raise_for_status()
             response_payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise CompositionApiError("Composition sidecar request failed") from exc
+        except httpx.HTTPStatusError as exc:
+            response_body = _truncate_error_body(exc.response.text)
+            self._logger.exception(
+                "composition_sidecar_compose_http_status_error",
+                base_url=self._base_url,
+                subscription_id=request.subscription_id,
+                resource_group_name=request.resource_group_name,
+                fragment_count=len(request.fragments),
+                status_code=exc.response.status_code,
+                response_body=response_body,
+            )
+            raise CompositionApiError(
+                "Composition sidecar request failed: "
+                f"HTTP {exc.response.status_code} from {exc.request.url.path}. Response body: {response_body}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            self._logger.exception(
+                "composition_sidecar_compose_http_error",
+                base_url=self._base_url,
+                subscription_id=request.subscription_id,
+                resource_group_name=request.resource_group_name,
+                fragment_count=len(request.fragments),
+                error_type=type(exc).__name__,
+            )
+            raise CompositionApiError(
+                f"Composition sidecar request failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        except ValueError as exc:
+            self._logger.exception(
+                "composition_sidecar_compose_invalid_json",
+                base_url=self._base_url,
+                subscription_id=request.subscription_id,
+                resource_group_name=request.resource_group_name,
+                fragment_count=len(request.fragments),
+            )
+            raise CompositionApiError(
+                f"Composition sidecar returned invalid JSON: {type(exc).__name__}: {exc}"
+            ) from exc
 
         try:
-            return CompositionResult(
+            result = CompositionResult(
                 status=str(response_payload["status"]),
                 merge_mode=str(response_payload["mergeMode"]),
                 files=[
@@ -117,8 +178,30 @@ class CompositionApiClient:
                 ],
                 warnings=[str(item) for item in response_payload.get("warnings", [])],
             )
+            self._logger.info(
+                "composition_sidecar_compose_succeeded",
+                base_url=self._base_url,
+                subscription_id=request.subscription_id,
+                resource_group_name=request.resource_group_name,
+                fragment_count=len(request.fragments),
+                returned_file_count=len(result.files),
+                merge_mode=result.merge_mode,
+                warning_count=len(result.warnings),
+                unresolved_reference_count=result.stats.unresolved_reference_count,
+            )
+            return result
         except (KeyError, TypeError, ValueError) as exc:
-            raise CompositionApiError("Composition sidecar returned an invalid payload") from exc
+            self._logger.exception(
+                "composition_sidecar_compose_invalid_payload",
+                base_url=self._base_url,
+                subscription_id=request.subscription_id,
+                resource_group_name=request.resource_group_name,
+                fragment_count=len(request.fragments),
+                response_payload=response_payload,
+            )
+            raise CompositionApiError(
+                f"Composition sidecar returned an invalid payload: {type(exc).__name__}: {exc}"
+            ) from exc
 
 
 def _camel_dict_to_snake_dict(payload: dict[str, Any]) -> dict[str, Any]:
@@ -135,3 +218,10 @@ def _camel_to_snake(value: str) -> str:
             characters.append("_")
         characters.append(character.lower())
     return "".join(characters)
+
+
+def _truncate_error_body(value: str, max_length: int = CompositionApiClient._MAX_ERROR_BODY_LENGTH) -> str:
+    normalized = value.strip()
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[: max_length - 3] + "..."

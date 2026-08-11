@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
@@ -163,7 +164,14 @@ class ResourceExportClient:
                 )
 
             poll_response = await self._request_with_retry("GET", poll_url)
-            payload = poll_response.json()
+            payload = _try_parse_json_response(poll_response)
+            if payload is None:
+                if poll_response.status_code == 202:
+                    retry_after_seconds = _get_retry_after_seconds(poll_response.headers)
+                    await self._sleep(retry_after_seconds or self._backoff_seconds)
+                    continue
+                raise ResourceExportError(_format_unexpected_poll_response_message(poll_response))
+
             status = str(payload.get("status", "")).lower()
 
             if poll_response.status_code in {200, 201} and "template" in payload:
@@ -223,3 +231,23 @@ def _get_retry_after_seconds(headers: httpx.Headers | dict[str, str]) -> float |
         return max(float(retry_after_value), 0.0)
     except ValueError:
         return None
+
+
+def _try_parse_json_response(response: httpx.Response) -> dict[str, Any] | None:
+    body = response.content.strip()
+    if not body:
+        return None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _format_unexpected_poll_response_message(response: httpx.Response) -> str:
+    content_type = response.headers.get("content-type", "unknown")
+    body_preview = response.text.strip().replace("\n", " ")[:200] or "<empty>"
+    return (
+        "Azure export polling returned a non-JSON response "
+        f"(status={response.status_code}, content_type={content_type}, body_preview={body_preview})"
+    )

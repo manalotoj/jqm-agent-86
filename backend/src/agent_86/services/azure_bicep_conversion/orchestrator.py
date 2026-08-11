@@ -4,9 +4,11 @@ from agent_86.integrations.avm.avm_catalog_client import AvmCatalogClient
 from agent_86.integrations.bicep.bicep_tool_client import BicepToolClient
 from agent_86.integrations.bicep_composition.composition_api_client import (
     CompositionApiClient,
+    CompositionApiError,
     CompositionFragment,
     CompositionRequest,
 )
+from agent_86.core.logging import get_logger
 from agent_86.services.azure_bicep_conversion.avm_annotation import annotate_bicep_with_avm_recommendations
 from agent_86.services.azure_bicep_conversion.diagnostics import format_bicep_diagnostics
 from agent_86.services.azure_bicep_conversion.export_pipeline import ExportPipeline
@@ -23,6 +25,7 @@ from agent_86.services.azure_bicep_conversion.secret_sanitizer import sanitize_b
 
 
 _RESOURCE_TYPE_RE = re.compile(r"resource\s+\w+\s+'([^'@]+)@[^']+'", re.MULTILINE)
+logger = get_logger(__name__)
 
 
 class AzureBicepConversionOrchestrator:
@@ -48,6 +51,13 @@ class AzureBicepConversionOrchestrator:
         gov_approved_avm_modules: list[str],
         resource_ids: list[str] | None = None,
     ) -> ConversionResult:
+        logger.info(
+            "azure_bicep_conversion_started",
+            subscription_id=subscription_id,
+            resource_group_name=resource_group_name,
+            azure_environment=azure_environment,
+            resource_id_count=0 if resource_ids is None else len(resource_ids),
+        )
         plan, export_fragments = await self._export_pipeline.export_resource_group(
             subscription_id=subscription_id,
             resource_group_name=resource_group_name,
@@ -104,6 +114,15 @@ class AzureBicepConversionOrchestrator:
                 )
             )
 
+        logger.info(
+            "azure_bicep_conversion_fragments_prepared",
+            subscription_id=subscription_id,
+            resource_group_name=resource_group_name,
+            fragment_count=len(sanitized_fragments),
+            secure_parameter_count=secure_parameter_count,
+            avm_annotation_count=avm_annotation_count,
+        )
+
         generated_files: list[GeneratedFile]
         merge_mode: str
         fallback_used = False
@@ -111,12 +130,33 @@ class AzureBicepConversionOrchestrator:
 
         try:
             composition_healthy = await self._composition_api_client.check_health()
+            logger.info(
+                "azure_bicep_composition_health_checked",
+                subscription_id=subscription_id,
+                resource_group_name=resource_group_name,
+                composition_healthy=composition_healthy,
+            )
         except Exception as exc:
             composition_healthy = False
-            diagnostics.append(f"Composition sidecar health check failed; using fallback package instead: {exc}")
+            logger.exception(
+                "azure_bicep_composition_health_check_failed",
+                subscription_id=subscription_id,
+                resource_group_name=resource_group_name,
+                error_type=type(exc).__name__,
+            )
+            diagnostics.append(
+                "Composition sidecar health check failed; using fallback package instead: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
         if composition_healthy:
             try:
+                logger.info(
+                    "azure_bicep_composition_started",
+                    subscription_id=subscription_id,
+                    resource_group_name=resource_group_name,
+                    fragment_count=len(sanitized_fragments),
+                )
                 composition_result = await self._composition_api_client.compose(
                     request=CompositionRequest(
                         subscription_id=subscription_id,
@@ -136,14 +176,56 @@ class AzureBicepConversionOrchestrator:
                 unresolved_reference_count = composition_result.stats.unresolved_reference_count
                 diagnostics.extend(composition_result.warnings)
                 generated_files = [GeneratedFile(path=file.path, content=file.content) for file in composition_result.files]
+                logger.info(
+                    "azure_bicep_composition_succeeded",
+                    subscription_id=subscription_id,
+                    resource_group_name=resource_group_name,
+                    merge_mode=merge_mode,
+                    generated_file_count=len(generated_files),
+                    unresolved_reference_count=unresolved_reference_count,
+                    warning_count=len(composition_result.warnings),
+                )
+            except CompositionApiError as exc:
+                logger.exception(
+                    "azure_bicep_composition_failed",
+                    subscription_id=subscription_id,
+                    resource_group_name=resource_group_name,
+                    fragment_count=len(sanitized_fragments),
+                    error_type=type(exc).__name__,
+                )
+                diagnostics.append(
+                    "Composition sidecar failed during compose; using fallback package instead: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                fallback_result = build_text_fallback_package(fragments=sanitized_fragments)
+                merge_mode = fallback_result.merge_mode
+                fallback_used = True
+                diagnostics.extend(fallback_result.warnings)
+                generated_files = fallback_result.files
             except Exception as exc:
-                diagnostics.append(f"Composition sidecar failed during compose; using fallback package instead: {exc}")
+                logger.exception(
+                    "azure_bicep_composition_failed_unexpectedly",
+                    subscription_id=subscription_id,
+                    resource_group_name=resource_group_name,
+                    fragment_count=len(sanitized_fragments),
+                    error_type=type(exc).__name__,
+                )
+                diagnostics.append(
+                    "Composition sidecar failed during compose; using fallback package instead: "
+                    f"{type(exc).__name__}: {exc}"
+                )
                 fallback_result = build_text_fallback_package(fragments=sanitized_fragments)
                 merge_mode = fallback_result.merge_mode
                 fallback_used = True
                 diagnostics.extend(fallback_result.warnings)
                 generated_files = fallback_result.files
         else:
+            logger.warning(
+                "azure_bicep_composition_unavailable_using_fallback",
+                subscription_id=subscription_id,
+                resource_group_name=resource_group_name,
+                fragment_count=len(sanitized_fragments),
+            )
             diagnostics.append("Composition sidecar was unavailable; using fallback package instead.")
             fallback_result = build_text_fallback_package(fragments=sanitized_fragments)
             merge_mode = fallback_result.merge_mode
@@ -177,6 +259,15 @@ class AzureBicepConversionOrchestrator:
             avm_annotation_count=avm_annotation_count,
             diagnostics=diagnostics,
             generated_files=package_result.generated_files,
+        )
+        logger.info(
+            "azure_bicep_conversion_completed",
+            subscription_id=subscription_id,
+            resource_group_name=resource_group_name,
+            merge_mode=summary.merge_mode,
+            fallback_used=summary.fallback_used,
+            generated_files=summary.generated_files,
+            diagnostics_count=len(summary.diagnostics),
         )
         return ConversionResult(artifact=package_result.artifact, summary=summary)
 

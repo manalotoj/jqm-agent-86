@@ -151,7 +151,8 @@ def _resource_export_client() -> ResourceExportClient:
 
 @lru_cache(maxsize=1)
 def _bicep_tool_client() -> BicepToolClient:
-    return BicepToolClient()
+    settings = _settings()
+    return BicepToolClient(executable=settings.bicep_cli_path or "bicep")
 
 
 @lru_cache(maxsize=1)

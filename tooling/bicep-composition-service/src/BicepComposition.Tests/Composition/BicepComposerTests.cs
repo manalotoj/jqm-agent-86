@@ -1,14 +1,17 @@
 using BicepComposition.Core.Composition;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace BicepComposition.Tests.Composition;
 
 public sealed class BicepComposerTests
 {
+    private static BicepComposer CreateComposer() => new(NullLogger<BicepComposer>.Instance);
+
     [Fact]
     public void Compose_orders_fragments_by_batch_index_and_builds_main_file()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -18,16 +21,57 @@ public sealed class BicepComposerTests
 
         var files = result.Files.ToArray();
         Assert.Equal("main.bicep", files[0].Path);
-        Assert.Equal("modules/fragment_001.bicep", files[1].Path);
-        Assert.Equal("modules/fragment_002.bicep", files[2].Path);
-        Assert.Contains("module fragment_001 './modules/fragment_001.bicep'", files[0].Content);
-        Assert.Contains("module fragment_002 './modules/fragment_002.bicep'", files[0].Content);
+        Assert.Equal("modules/fragment_001_type.bicep", files[1].Path);
+        Assert.Equal("modules/fragment_002_type.bicep", files[2].Path);
+        Assert.Contains("module fragment_001_type './modules/fragment_001_type.bicep'", files[0].Content);
+        Assert.Contains("module fragment_002_type './modules/fragment_002_type.bicep'", files[0].Content);
+    }
+
+    [Fact]
+    public void Compose_partitions_single_fragment_into_multiple_domain_modules()
+    {
+        var composer = CreateComposer();
+
+        var result = composer.Compose(
+        [
+            new ComposeInputFragment(
+                1,
+                ["resource-1", "resource-2"],
+                "resource stg 'Microsoft.Storage/storageAccounts@2023-01-01' = {}\nresource app 'Microsoft.Web/sites@2023-01-01' = {}",
+                new Dictionary<string, string>())
+        ]);
+
+        Assert.Contains(result.Files, file => file.Path == "modules/fragment_001_storage.bicep");
+        Assert.Contains(result.Files, file => file.Path == "modules/fragment_001_web.bicep");
+        var main = result.Files.Single(file => file.Path == "main.bicep").Content;
+        Assert.Contains("module fragment_001_storage './modules/fragment_001_storage.bicep'", main);
+        Assert.Contains("module fragment_001_web './modules/fragment_001_web.bicep'", main);
+    }
+
+    [Fact]
+    public void Compose_inlines_shared_param_declarations_into_domain_modules_so_they_are_self_contained()
+    {
+        var composer = CreateComposer();
+
+        var result = composer.Compose(
+        [
+            new ComposeInputFragment(
+                1,
+                ["resource-1"],
+                "param storageName string = 'mystorage'\nresource stg 'Microsoft.Storage/storageAccounts@2023-01-01' = {\n  name: storageName\n  location: 'westus'\n}",
+                new Dictionary<string, string>())
+        ]);
+
+        Assert.DoesNotContain(result.Files, file => file.Path == "modules/fragment_001_shared.bicep");
+        var storageModule = result.Files.Single(file => file.Path == "modules/fragment_001_storage.bicep").Content;
+        Assert.Contains("param storageName string = 'mystorage'", storageModule);
+        Assert.Contains("name: storageName", storageModule);
     }
 
     [Fact]
     public void Compose_deduplicates_exact_match_params_and_vars()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -38,7 +82,7 @@ public sealed class BicepComposerTests
                 new Dictionary<string, string>())
         ]);
 
-        var module = result.Files.Single(file => file.Path == "modules/fragment_001.bicep").Content;
+        var module = result.Files.Single(file => file.Path == "modules/fragment_001_shared.bicep").Content;
         Assert.Equal(1, result.Stats.DeduplicatedParams);
         Assert.Equal(1, result.Stats.DeduplicatedVars);
         Assert.Equal(2, result.Warnings.Count(warning => warning.Contains("Deduplicated", StringComparison.Ordinal)));
@@ -51,7 +95,7 @@ public sealed class BicepComposerTests
     [Fact]
     public void Compose_renames_semantic_collisions_and_rewrites_references()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -62,7 +106,7 @@ public sealed class BicepComposerTests
                 new Dictionary<string, string>())
         ]);
 
-        var module = result.Files.Single(file => file.Path == "modules/fragment_002.bicep").Content;
+        var module = result.Files.Single(file => file.Path == "modules/fragment_002_shared.bicep").Content;
         Assert.Contains("param location string = 'eastus'", module);
         Assert.Contains("param location_batch2 string = 'westus'", module);
         Assert.Contains("output picked string = location_batch2", module);
@@ -72,7 +116,7 @@ public sealed class BicepComposerTests
     [Fact]
     public void Compose_reports_unresolved_references_when_metadata_target_is_unknown()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -94,7 +138,7 @@ public sealed class BicepComposerTests
     [Fact]
     public void Compose_emits_compiler_warnings_for_invalid_bicep_input()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -112,7 +156,7 @@ public sealed class BicepComposerTests
     [Fact]
     public void Compose_uses_syntax_backed_declaration_matching_for_multiline_param_deduplication()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -123,7 +167,7 @@ public sealed class BicepComposerTests
                 new Dictionary<string, string>())
         ]);
 
-        var module = result.Files.Single(file => file.Path == "modules/fragment_004.bicep").Content;
+        var module = result.Files.Single(file => file.Path == "modules/fragment_004_shared.bicep").Content;
         Assert.Equal(1, result.Stats.DeduplicatedParams);
         Assert.Single(result.Warnings.Where(warning => warning.Contains("Deduplicated param 'location'", StringComparison.Ordinal)));
         Assert.Equal(1, module.Split("param location string = 'eastus'").Length - 1);
@@ -132,7 +176,7 @@ public sealed class BicepComposerTests
     [Fact]
     public void Compose_uses_declaration_local_rename_rewriting_without_mutating_declaration_string_literals()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -143,7 +187,7 @@ public sealed class BicepComposerTests
                 new Dictionary<string, string>())
         ]);
 
-        var module = result.Files.Single(file => file.Path == "modules/fragment_002.bicep").Content;
+        var module = result.Files.Single(file => file.Path == "modules/fragment_002_shared.bicep").Content;
         Assert.Contains("param location_batch2 string = 'westus'", module);
         Assert.Contains("var chosen = '${location_batch2}'", module);
         Assert.DoesNotContain("var chosen = '${location}'", module, StringComparison.Ordinal);
@@ -154,7 +198,7 @@ public sealed class BicepComposerTests
     [Fact]
     public void Compose_rewrites_references_in_multiline_var_declarations_after_deterministic_rename()
     {
-        var composer = new BicepComposer();
+        var composer = CreateComposer();
 
         var result = composer.Compose(
         [
@@ -165,7 +209,7 @@ public sealed class BicepComposerTests
                 new Dictionary<string, string>())
         ]);
 
-        var module = result.Files.Single(file => file.Path == "modules/fragment_003.bicep").Content;
+        var module = result.Files.Single(file => file.Path == "modules/fragment_003_shared.bicep").Content;
         Assert.Contains("param location_batch3 string = 'westus'", module);
         Assert.Contains("location_batch3", module);
         Assert.Contains("  literal: 'location'", module);

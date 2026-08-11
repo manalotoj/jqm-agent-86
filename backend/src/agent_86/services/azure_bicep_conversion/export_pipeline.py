@@ -30,25 +30,27 @@ class ExportPipeline:
         wildcard_export_resource_limit: int = 200,
         batch_size: int = DEFAULT_EXPORT_BATCH_SIZE,
     ) -> ExportPlan:
+        filtered_resource_ids, filter_warnings = _filter_resource_ids(resource_ids)
         resource_count = await self._resource_export_client.get_resource_count(
             subscription_id=subscription_id,
             resource_group_name=resource_group_name,
         )
+        effective_resource_count = len(filtered_resource_ids) if filtered_resource_ids else resource_count
         preflight = determine_preflight_decision(
-            resource_count=resource_count,
+            resource_count=effective_resource_count,
             wildcard_export_resource_limit=wildcard_export_resource_limit,
             batch_size=batch_size,
         )
 
         batches = _build_export_batches(
             preflight=preflight,
-            resource_ids=resource_ids,
+            resource_ids=filtered_resource_ids,
         )
         return ExportPlan(
             resource_count=resource_count,
             export_mode=preflight.export_mode,
             batches=batches,
-            warnings=preflight.warnings,
+            warnings=[*preflight.warnings, *filter_warnings],
         )
 
     async def export_resource_group(
@@ -99,6 +101,51 @@ class ExportPipeline:
             )
 
         return plan, fragments
+
+
+_EXCLUDED_RESOURCE_TYPE_PATTERNS = (
+    "/providers/microsoft.authorization/roleassignments/",
+    "/providers/microsoft.insights/scheduledqueryrules/",
+    "/providers/microsoft.insights/metricalerts/",
+    "/providers/microsoft.alertsmanagement/prometheusrulergroups/",
+    "/providers/microsoft.alertsmanagement/actionrules/",
+)
+
+
+def _filter_resource_ids(resource_ids: list[str] | None) -> tuple[list[str], list[str]]:
+    normalized_resource_ids = _normalize_resource_ids(resource_ids)
+    if not normalized_resource_ids:
+        return [], []
+
+    included: list[str] = []
+    excluded: list[str] = []
+    for resource_id in normalized_resource_ids:
+        lowered = resource_id.lower()
+        if any(pattern in lowered for pattern in _EXCLUDED_RESOURCE_TYPE_PATTERNS) or _is_storage_service_child_resource(lowered):
+            excluded.append(resource_id)
+            continue
+        included.append(resource_id)
+
+    warnings: list[str] = []
+    if excluded:
+        warnings.append(
+            "Excluded known generated/default resource IDs before export: "
+            + ", ".join(excluded)
+        )
+
+    return included, warnings
+
+
+def _is_storage_service_child_resource(resource_id: str) -> bool:
+    return "/providers/microsoft.storage/storageaccounts/" in resource_id and any(
+        segment in resource_id
+        for segment in (
+            "/blobservices/",
+            "/queueservices/",
+            "/tableservices/",
+            "/fileservices/",
+        )
+    )
 
 
 def _build_export_batches(*, preflight: PreflightDecision, resource_ids: list[str] | None) -> list[ExportBatch]:

@@ -1,5 +1,6 @@
 using BicepComposition.Api.Contracts;
 using BicepComposition.Core.Composition;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace BicepComposition.Tests.Composition;
@@ -9,7 +10,7 @@ public sealed class CompositionContractMappingTests
     [Fact]
     public void Compose_result_maps_to_api_contract_with_stats_warnings_and_unresolved_references()
     {
-        var composer = new BicepComposer();
+        var composer = new BicepComposer(NullLogger<BicepComposer>.Instance);
 
         var composeResult = composer.Compose(
         [
@@ -57,7 +58,7 @@ public sealed class CompositionContractMappingTests
         Assert.Equal("ast", response.MergeMode);
         Assert.Equal(2, response.Files.Count);
         Assert.Equal("main.bicep", response.Files[0].Path);
-        Assert.Equal("modules/fragment_001.bicep", response.Files[1].Path);
+        Assert.Equal("modules/fragment_001_storage.bicep", response.Files[1].Path);
         Assert.Equal(1, response.Stats.FragmentCount);
         Assert.Equal(response.Stats.UnresolvedReferenceCount, response.UnresolvedReferences.Count);
         Assert.Single(response.UnresolvedReferences);
