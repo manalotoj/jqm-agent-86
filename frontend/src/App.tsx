@@ -6,6 +6,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
+import { getActiveAccountOrFirst, isAuthReady } from "./auth/msalConfig";
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -87,6 +88,9 @@ const LOGIN_SCOPES = [import.meta.env.VITE_API_SCOPE].filter(
 
 const DEFAULT_CHAT_MODEL = "gpt-4.1-mini";
 const PREMIUM_CHAT_MODEL = "gpt-5.4";
+const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_ARTIFACTS: Artifact[] = [];
+const EMPTY_SESSIONS: Session[] = [];
 
 type ComposerModel = typeof DEFAULT_CHAT_MODEL | typeof PREMIUM_CHAT_MODEL;
 type NoticeTone = "success" | "error" | "info";
@@ -493,14 +497,14 @@ function EmptyConversationState() {
 }
 
 function AuthenticatedApp() {
-  const { instance, accounts } = useMsal();
-  const activeAccount = accounts[0];
+  const { instance } = useMsal();
+  const activeAccount = getActiveAccountOrFirst();
   const activeUserId = String(
     activeAccount?.idTokenClaims?.oid ?? activeAccount?.localAccountId ?? "current-user",
   );
   const queryClient = useQueryClient();
 
-  const { data: sessions = [], isLoading, error } = useSessions();
+  const { data: sessions = EMPTY_SESSIONS, isLoading, error } = useSessions();
   const createSession = useCreateSession();
   const updateSession = useUpdateSession();
   const deleteSession = useDeleteSession();
@@ -527,12 +531,12 @@ function AuthenticatedApp() {
   }, [selectedSessionId, sessions]);
 
   const {
-    data: messages = [],
+    data: messages = EMPTY_MESSAGES,
     isLoading: isMessagesLoading,
     isFetching: isMessagesFetching,
   } = useMessages(selectedSession?.id ?? null);
   const {
-    data: artifacts = [],
+    data: artifacts = EMPTY_ARTIFACTS,
     isLoading: isArtifactsLoading,
     error: artifactsError,
   } = useArtifacts(selectedSession?.id ?? null);
@@ -587,7 +591,15 @@ function AuthenticatedApp() {
   };
 
   useEffect(() => {
-    setSelectedArtifactIds((current) => current.filter((artifactId) => artifactMap.has(artifactId)));
+    setSelectedArtifactIds((current) => {
+      const next = current.filter((artifactId) => artifactMap.has(artifactId));
+
+      if (next.length === current.length && next.every((artifactId, index) => artifactId === current[index])) {
+        return current;
+      }
+
+      return next;
+    });
   }, [artifactMap]);
 
   useEffect(() => {
@@ -621,6 +633,8 @@ function AuthenticatedApp() {
   }, [messages, streamingStatus]);
 
   const handleLoginOut = () => {
+    queryClient.clear();
+
     instance.logoutRedirect().catch((logoutError) => {
       console.error("Logout failed:", logoutError);
     });
@@ -1221,13 +1235,13 @@ function AuthenticatedApp() {
 
         <div
           className={cn(
-            "grid flex-1 gap-6 p-6",
+            "grid min-h-0 flex-1 gap-6 p-6",
             isRightPaneOpen
-              ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.85fr)]"
-              : "xl:grid-cols-[minmax(0,1fr)]",
+              ? "lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.85fr)]"
+              : "grid-cols-1",
           )}
         >
-          <section className="flex min-h-0 flex-col rounded-2xl border bg-card shadow-sm">
+          <section className="flex min-h-0 min-w-0 flex-col rounded-2xl border bg-card shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-5">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">
@@ -1478,7 +1492,12 @@ function AuthenticatedApp() {
               </div>
             </div>
           </section>
-          <section className={cn("space-y-6", !isRightPaneOpen && "hidden")}>
+          <section
+            className={cn(
+              "min-w-0 space-y-6",
+              isRightPaneOpen ? "block" : "hidden",
+            )}
+          >
             <div className="rounded-2xl border bg-card p-6 shadow-sm">
               <p className="text-sm font-medium text-muted-foreground">Authenticated as</p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -1799,6 +1818,16 @@ function SignInScreen() {
 }
 
 export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    setAuthReady(isAuthReady());
+  }, []);
+
+  if (!authReady) {
+    return <div>Loading authentication...</div>;
+  }
+
   return (
     <>
       <UnauthenticatedTemplate>

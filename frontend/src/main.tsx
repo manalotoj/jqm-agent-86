@@ -1,18 +1,25 @@
-import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MsalProvider } from '@azure/msal-react'
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { msalInstance } from './auth/msalConfig.ts'
+import { msalInstance, initialize } from './auth/msalConfig.ts'
 import './index.css'
 import App from './App.tsx'
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
-msalInstance.initialize().then(() => {
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
+async function bootstrap() {
+  try {
+    await initialize();
+    createRoot(document.getElementById("root")!).render(
       <MsalProvider instance={msalInstance}>
         <QueryClientProvider client={queryClient}>
           <TooltipProvider>
@@ -20,8 +27,10 @@ msalInstance.initialize().then(() => {
           </TooltipProvider>
         </QueryClientProvider>
       </MsalProvider>
-    </StrictMode>
-  );
-}).catch((error: unknown) => {
-  console.error("MSAL initialization failed: ", error);
-});
+    );
+  } catch (error) {
+    console.error("MSAL initialization failed: ", error);
+  }
+}
+
+bootstrap();
