@@ -1,0 +1,197 @@
+name: Infra Dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: Azure resource group
+        required: false
+        default: rg-agent86-dev
+      location:
+        description: Azure region used when creating missing resources
+        required: false
+        default: eastus2
+      cosmos_account_name:
+        description: Optional explicit Cosmos DB account name
+        required: false
+        default: ''
+      key_vault_name:
+        description: Optional explicit Key Vault name
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      key_vault_name: ${{ steps.resolve.outputs.key_vault_name }}
+      cosmos_account_name: ${{ steps.resolve.outputs.cosmos_account_name }}
+      cosmos_endpoint: ${{ steps.resolve.outputs.cosmos_endpoint }}
+      storage_account_name: ${{ steps.resolve.outputs.storage_account_name }}
+      static_web_app_name: ${{ steps.resolve.outputs.static_web_app_name }}
+      static_web_app_hostname: ${{ steps.resolve.outputs.static_web_app_hostname }}
+      app_insights_name: ${{ steps.resolve.outputs.app_insights_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision hosting resources
+        run: >-
+          zsh "${{ github.workspace }}/common/scripts/azure_deploy/provision_agent86_dev_hosting.zsh"
+          --resource-group "${{ inputs.resource_group }}"
+          --location "${{ inputs.location }}"
+
+      - name: Ensure Cosmos DB
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmd=(
+            zsh "${{ github.workspace }}/common/scripts/cosmos_db/ensure_agent86_cosmos.zsh"
+            --resource-group "${{ inputs.resource_group }}"
+            --location "${{ inputs.location }}"
+          )
+          if [[ -n "${{ inputs.cosmos_account_name }}" ]]; then
+            cmd+=(--account-name "${{ inputs.cosmos_account_name }}")
+          fi
+          "${cmd[@]}"
+
+      - name: Ensure artifact blob storage
+        run: >-
+          zsh "${{ github.workspace }}/common/scripts/azure_storage/create_artifact_blob_storage.zsh"
+          --resource-group "${{ inputs.resource_group }}"
+          --location "${{ inputs.location }}"
+          --environments dev
+
+      - name: Ensure Application Insights
+        run: >-
+          zsh "${{ github.workspace }}/common/scripts/azure_monitor/create_application_insights.zsh"
+          --resource-group "${{ inputs.resource_group }}"
+          --location "${{ inputs.location }}"
+          --workspace-name law-agent86-dev
+
+      - name: Ensure Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--resource-group "${{ inputs.resource_group }}" --location "${{ inputs.location }}")
+          if [[ -n "${{ inputs.key_vault_name }}" ]]; then
+            args+=(--name "${{ inputs.key_vault_name }}")
+          fi
+          output=$(zsh "${{ github.workspace }}/common/scripts/azure_key_vault/create_key_vault.zsh" "${args[@]}")
+          echo "$output"
+
+      - name: Resolve reconciled resource metadata
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          rg="${{ inputs.resource_group }}"
+
+          require_single_name() {
+            local label="$1"
+            shift
+            mapfile -t items < <("$@")
+            local filtered=()
+            local item
+            for item in "${items[@]}"; do
+              [[ -n "$item" ]] && filtered+=("$item")
+            done
+            if [[ ${#filtered[@]} -eq 0 ]]; then
+              echo "Error: no $label resources found in '$rg'." >&2
+              exit 1
+            fi
+            if [[ ${#filtered[@]} -gt 1 ]]; then
+              echo "Error: multiple $label resources found in '$rg': ${filtered[*]}" >&2
+              exit 1
+            fi
+            printf '%s\n' "${filtered[0]}"
+          }
+
+          key_vault_name=$(require_single_name "Key Vault" az keyvault list --resource-group "$rg" --query '[].name' --output tsv)
+          cosmos_account_name=$(require_single_name "Cosmos DB account" az cosmosdb list --resource-group "$rg" --query '[].name' --output tsv)
+          static_web_app_name=$(require_single_name "Static Web App" az staticwebapp list --resource-group "$rg" --query '[].name' --output tsv)
+          storage_account_name=$(require_single_name "Storage account matching agent86" az storage account list --resource-group "$rg" --query "[?contains(name, 'agent86')].name" --output tsv)
+          app_insights_name=$(require_single_name "Application Insights" az monitor app-insights component list --resource-group "$rg" --query '[].name' --output tsv)
+
+          cosmos_endpoint=$(az cosmosdb show --resource-group "$rg" --name "$cosmos_account_name" --query documentEndpoint --output tsv)
+          static_web_app_hostname=$(az staticwebapp show --resource-group "$rg" --name "$static_web_app_name" --query defaultHostname --output tsv)
+          blob_connection_string=$(az storage account show-connection-string --resource-group "$rg" --name "$storage_account_name" --query connectionString --output tsv)
+          appinsights_connection_string=$(az monitor app-insights component show --app "$app_insights_name" --resource-group "$rg" --query connectionString --output tsv)
+          cosmos_key=$(az cosmosdb keys list --resource-group "$rg" --name "$cosmos_account_name" --query primaryMasterKey --output tsv)
+          swa_deployment_token=$(az staticwebapp secrets list --resource-group "$rg" --name "$static_web_app_name" --query properties.apiKey --output tsv)
+
+          echo "key_vault_name=$key_vault_name" >> "$GITHUB_OUTPUT"
+          echo "cosmos_account_name=$cosmos_account_name" >> "$GITHUB_OUTPUT"
+          echo "cosmos_endpoint=$cosmos_endpoint" >> "$GITHUB_OUTPUT"
+          echo "storage_account_name=$storage_account_name" >> "$GITHUB_OUTPUT"
+          echo "static_web_app_name=$static_web_app_name" >> "$GITHUB_OUTPUT"
+          echo "static_web_app_hostname=$static_web_app_hostname" >> "$GITHUB_OUTPUT"
+          echo "app_insights_name=$app_insights_name" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Reconciled Azure resources"
+            echo "- Key Vault: $key_vault_name"
+            echo "- Cosmos DB: $cosmos_account_name"
+            echo "- Storage: $storage_account_name"
+            echo "- Static Web App: $static_web_app_name"
+            echo "- Static Web App URL: https://$static_web_app_hostname"
+            echo "- Application Insights: $app_insights_name"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          az keyvault secret set --vault-name "$key_vault_name" --name cosmos-key --value "$cosmos_key" --output none
+          az keyvault secret set --vault-name "$key_vault_name" --name applicationinsights-connection-string --value "$appinsights_connection_string" --output none
+          az keyvault secret set --vault-name "$key_vault_name" --name azure-blob-connection-string --value "$blob_connection_string" --output none
+          az keyvault secret set --vault-name "$key_vault_name" --name azure-static-web-app-deployment-token --value "$swa_deployment_token" --output none
+
+      - name: Materialize backend env file from GitHub secret when provided
+        if: ${{ steps.resolve.outputs.key_vault_name != '' }}
+        shell: bash
+        env:
+          BACKEND_ENV_API_DEV: ${{ secrets.BACKEND_ENV_API_DEV }}
+        run: |
+          set -euo pipefail
+          env_file="${{ github.workspace }}/backend/.env.api"
+          if [[ -n "${BACKEND_ENV_API_DEV:-}" ]]; then
+            printf '%s\n' "$BACKEND_ENV_API_DEV" > "$env_file"
+            chmod 600 "$env_file"
+            {
+              echo "### Backend env import source"
+              echo "- Source: GitHub environment secret BACKEND_ENV_API_DEV"
+              echo "- Materialized file: $env_file"
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -f "$env_file" ]]; then
+            {
+              echo "### Backend env import source"
+              echo "- Source: existing workspace file $env_file"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Backend env import source"
+              echo "- Skipped: no BACKEND_ENV_API_DEV secret provided and no $env_file file present"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Import backend secrets from env file when available
+        if: ${{ steps.resolve.outputs.key_vault_name != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file="${{ github.workspace }}/backend/.env.api"
+          if [[ -f "$env_file" ]]; then
+            zsh "${{ github.workspace }}/common/scripts/azure_key_vault/import_env_to_key_vault.zsh" \
+              --key-vault-name "${{ steps.resolve.outputs.key_vault_name }}" \
+              --env-file "$env_file"
+          else
+            echo "No backend env file available for Key Vault import; skipping."
+          fi

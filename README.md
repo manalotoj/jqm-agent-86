@@ -297,6 +297,46 @@ When you use `zsh scripts/start_local.zsh`, the script loads:
 
 If one or more files do not exist, the script falls back to already-exported environment variables.
 
+### Local env files and GitHub Actions can coexist
+
+This repo intentionally supports both:
+
+- local developer runs using local env files such as `backend/.env.api`
+- GitHub Actions deployment workflows using GitHub Environment secrets plus Azure Key Vault
+
+The application config contract stays the same in both cases. The difference is only where the values come from.
+
+For local development:
+
+- keep using your normal local `backend/.env.api`
+- keep using local `frontend/.env.*` files as needed
+
+For GitHub Actions:
+
+- the `Infra Dev` workflow can materialize `backend/.env.api` inside the runner from the GitHub Environment secret `BACKEND_ENV_API_DEV`
+- after materializing that file, the workflow imports the allowlisted values into Azure Key Vault
+- if `BACKEND_ENV_API_DEV` is not set, the workflow falls back to an existing `backend/.env.api` file in the workspace
+- if neither exists, the Key Vault import step is skipped with a clear workflow summary message
+
+Recommended setup for the `dev` GitHub Environment:
+
+- OIDC / Azure login secrets:
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+- backend env content secret:
+  - `BACKEND_ENV_API_DEV`
+
+Example `BACKEND_ENV_API_DEV` secret value:
+
+```env
+FOUNDRY_OPENAI_API_KEY=your-foundry-or-openai-key
+TAVILY_API_KEY=
+BRAVE_SEARCH_API_KEY=
+```
+
+Only include values that you want the Key Vault import helper to ingest. Infra-managed values such as Cosmos keys, blob connection strings, Application Insights connection strings, and the Static Web App deployment token are reconciled directly by the workflow and stored in Key Vault automatically.
+
 ### 3. Start both the API and UI together
 
 From the repository root:
@@ -378,6 +418,354 @@ Add this block to Cline's MCP server settings:
 ```
 
 The helper script already prefers the repo-local `.venv` when present, so you usually do not need to hardcode a Python interpreter into the Cline config.
+
+## Azure Deployment
+
+This repository now includes Azure CLI + zsh helpers for provisioning and deploying the current app stack into Azure.
+
+### Target Azure shape
+
+The current dev hosting target is a shared resource group with:
+
+- 1 Azure Container Registry (ACR)
+- 1 Log Analytics Workspace (LAW)
+- 1 shared Azure Container Apps Environment (ACAE)
+- 1 external Container App for the FastAPI backend
+- 1 internal Container App for the .NET Bicep composition API
+- 1 Azure Static Web App (SWA) for the frontend
+- 1 optional internal Container App for the MCP server
+
+Default dev names:
+
+- Resource group: `rg-agent86-dev`
+- ACR: `acragent86dev`
+- Log Analytics Workspace: `law-agent86-dev`
+- Container Apps environment: `acae-agent86-dev`
+- Static Web App: `swa-agent86-dev`
+- API app: `aca-agent86-api-dev`
+- MCP app: `aca-agent86-mcp-dev`
+- Tooling app: `aca-agent86-tooling-dev`
+
+### Container images and Dockerfiles
+
+The deployment helpers now assume these checked-in Dockerfiles by default:
+
+- API: `/Users/johnmanaloto/source/github/jqm-agent-86/backend/Dockerfile.api`
+- MCP: `/Users/johnmanaloto/source/github/jqm-agent-86/backend/Dockerfile.mcp`
+- Tooling: `/Users/johnmanaloto/source/github/jqm-agent-86/tooling/bicep-composition-service/Dockerfile`
+
+Image defaults used by the deploy script:
+
+- `agent86-api`
+- `agent86-mcp`
+- `agent86-tooling`
+
+### Provision shared Azure hosting resources
+
+First create or reuse the shared hosting resources in the target resource group:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_deploy/provision_agent86_dev_hosting.zsh \
+  --resource-group rg-agent86-dev
+```
+
+That helper provisions or reuses:
+
+- Azure Container Registry
+- Log Analytics Workspace
+- Azure Container Apps Environment
+- Azure Static Web App
+
+You must already be logged into Azure CLI:
+
+```bash
+az login
+az account show
+```
+
+### GitHub Actions deployment flow
+
+The repository includes these GitHub workflows for Azure dev automation:
+
+- `/Users/johnmanaloto/source/github/jqm-agent-86/.github/workflows/infra-dev.yml`
+- `/Users/johnmanaloto/source/github/jqm-agent-86/.github/workflows/deploy-backend-dev.yml`
+- `/Users/johnmanaloto/source/github/jqm-agent-86/.github/workflows/deploy-frontend-dev.yml`
+
+Current behavior:
+
+- `infra-dev.yml` reconciles or reuses the required Azure dev resources
+- it fails on ambiguous Azure resource discovery instead of silently picking the first match
+- it stores normalized runtime secrets in Key Vault, including:
+  - `cosmos-key`
+  - `applicationinsights-connection-string`
+  - `azure-blob-connection-string`
+  - `azure-static-web-app-deployment-token`
+- it can also import additional backend secrets from `BACKEND_ENV_API_DEV` via a temporary `backend/.env.api` file in the runner workspace
+- `deploy-backend-dev.yml` reads deployment secrets from Key Vault and deploys the backend Container Apps
+- `deploy-frontend-dev.yml` reads the Static Web App deployment token from Key Vault and deploys the frontend
+
+This means you do not have to choose between local development and GitHub-based Azure deployment. Local files remain the developer experience, while GitHub Environment secrets and Key Vault back the shared Azure deployment path.
+
+### First-time GitHub setup checklist
+
+Use this checklist before your first real GitHub-hosted Azure deployment.
+
+#### 1. Create or choose an Azure identity for GitHub OIDC
+
+Create an Azure app registration or user-assigned managed identity that GitHub Actions will use to log into Azure.
+
+Required values to capture for GitHub:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+That identity must have enough RBAC in the target subscription or resource group to:
+
+- create or update resource groups and app hosting resources when needed
+- read and write Key Vault secrets
+- read Cosmos DB keys
+- read Static Web App secrets
+- deploy Container Apps and related resources
+
+At minimum, make sure it can manage the target dev resource group and any resources created within it.
+
+#### 2. Add the GitHub OIDC federated credential
+
+Configure a federated credential on the Azure identity that trusts this GitHub repository and the branch or environment you want to deploy from.
+
+Typical trust inputs:
+
+- GitHub organization/user
+- repository name
+- branch or environment condition
+
+The workflows already use:
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+```
+
+so once the Azure federated credential is configured correctly, `azure/login@v2` can exchange the GitHub OIDC token for Azure access without storing a client secret in GitHub.
+
+#### 3. Create the GitHub `dev` Environment
+
+In the repository settings, create an Environment named `dev`.
+
+Add these required secrets:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `BACKEND_ENV_API_DEV`
+
+Add these required environment variables used by the deploy workflows:
+
+- `ENTRA_TENANT_ID`
+- `ENTRA_API_CLIENT_ID`
+- `ENTRA_API_AUDIENCE`
+- `FOUNDRY_OPENAI_BASE_URL`
+- `FOUNDRY_DEFAULT_CHAT_MODEL`
+- `FOUNDRY_PREMIUM_CHAT_MODEL`
+- `VITE_ENTRA_CLIENT_ID`
+- `VITE_ENTRA_TENANT_ID`
+- `VITE_API_SCOPE`
+
+Recommended notes:
+
+- keep `BACKEND_ENV_API_DEV` limited to backend secrets that should be imported into Key Vault
+- do not put Azure infrastructure-generated secrets there when the workflow already reconciles them directly
+- consider using GitHub Environment protection rules if you want approvals before deployment
+
+#### 4. Confirm Azure naming expectations
+
+By default, the workflows assume the dev resource group is:
+
+- `rg-agent86-dev`
+
+and expect the reconciled resources to follow the current single-resource-per-type model in that group.
+
+If you intentionally use different names, run the infra workflow first and verify the created resources match your intended layout.
+
+#### 5. Recommended first workflow run order
+
+Run the workflows in this order for a new environment:
+
+1. `Infra Dev`
+   - creates or reuses hosting resources
+   - reconciles Cosmos DB, Storage, Application Insights, Key Vault, and Static Web App metadata
+   - stores normalized secrets in Key Vault
+2. `Deploy Backend Dev`
+   - reads runtime secrets from Key Vault
+   - deploys the backend Container Apps
+   - runs a backend smoke test
+3. `Deploy Frontend Dev`
+   - resolves the Static Web App hostname and deployment token
+   - builds and uploads the frontend
+   - runs a frontend smoke test
+
+#### 6. Verify after the first run
+
+After the first full run, verify:
+
+- the `Infra Dev` workflow summary shows exactly one resolved Key Vault, Cosmos DB account, Storage account, Static Web App, and Application Insights resource
+- Key Vault contains the expected secrets
+- the backend health endpoint responds successfully
+- the frontend loads and points at the deployed backend URL
+
+If a workflow fails with an ambiguity error, it means the resource group contains multiple matching candidates and the workflow intentionally refused to guess.
+
+### Deploy backend services to Azure Container Apps
+
+The main service deployment helper builds images with Azure Container Registry Tasks and then creates or updates the Container Apps.
+
+Default deployment, recommended for now:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/deploy_agent86_services.zsh \
+  --resource-group rg-agent86-dev
+```
+
+That deploys:
+
+- FastAPI API as an external Container App on port `8000`
+- Bicep composition tooling API as an internal Container App on port `8080`
+
+It also injects this API environment wiring by default:
+
+- `BICEP_COMPOSITION_BASE_URL=http://aca-agent86-tooling-dev`
+
+To opt into MCP deployment as well:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/deploy_agent86_services.zsh \
+  --resource-group rg-agent86-dev \
+  --deploy-mcp
+```
+
+When `--deploy-mcp` is used, the script also injects:
+
+- `MCP_BASE_URL=http://aca-agent86-mcp-dev`
+
+#### Important MCP caveat
+
+The current MCP implementation is still stdio-oriented, not HTTP-native. That means:
+
+- the MCP container image can be built
+- the MCP Container App can be created if you explicitly request it
+- but the current service shape may not behave like a normal HTTP service behind Container Apps
+
+For that reason, `deploy_agent86_services.zsh` skips MCP by default and requires `--deploy-mcp` to include it.
+
+### Supplying app configuration and secrets
+
+The deploy helper supports repeatable env and secret flags per service:
+
+- `--api-env KEY=VALUE`
+- `--api-secret KEY=VALUE`
+- `--tooling-env KEY=VALUE`
+- `--tooling-secret KEY=VALUE`
+- `--mcp-env KEY=VALUE`
+- `--mcp-secret KEY=VALUE`
+
+Example:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/deploy_agent86_services.zsh \
+  --resource-group rg-agent86-dev \
+  --api-env APP_ENV=dev \
+  --api-env CORS_ALLOWED_ORIGINS=https://example.com \
+  --api-secret OPENAI_API_KEY=... \
+  --tooling-env ASPNETCORE_ENVIRONMENT=Development
+```
+
+You will likely need to provide your real backend/runtime settings for:
+
+- Entra auth
+- Cosmos DB
+- Blob Storage
+- model configuration
+- telemetry / monitoring
+- any provider credentials used by tools
+
+### Inspect deployed Container App URLs
+
+After deployment, you can print useful values from a Container App:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/print_container_app_env.zsh \
+  --resource-group rg-agent86-dev \
+  --app-name aca-agent86-api-dev
+```
+
+This prints values such as:
+
+- `AZURE_CONTAINER_APP_NAME`
+- `AZURE_CONTAINER_APP_FQDN`
+- `AZURE_CONTAINER_APP_URL` for external ingress apps
+
+Use the API URL from that output as the frontend's `VITE_API_BASE_URL`.
+
+### Configure frontend build environment for Azure Static Web Apps
+
+The frontend expects these Vite environment variables for Azure deployment:
+
+- `VITE_ENTRA_CLIENT_ID`
+- `VITE_ENTRA_TENANT_ID`
+- `VITE_REDIRECT_URI`
+- `VITE_API_SCOPE`
+- `VITE_API_BASE_URL`
+
+Use the helper to print them in the expected format:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_static_web_apps/print_frontend_deploy_env.zsh \
+  --api-url https://<api-fqdn> \
+  --redirect-uri https://<your-swa-hostname> \
+  --tenant-id <entra-tenant-id> \
+  --client-id <frontend-spa-client-id> \
+  --api-scope <api-scope>
+```
+
+### Azure Static Web App deployment details
+
+The shared hosting provisioner creates the Static Web App resource, but it does not publish frontend content for you.
+
+Typical flow:
+
+1. Provision the SWA resource.
+2. Get the SWA hostname from Azure.
+3. Generate frontend build env values using `print_frontend_deploy_env.zsh`.
+4. Build and deploy the frontend using your preferred SWA deployment path.
+
+If you need the SWA deployment token, the underlying helper supports printing it during creation:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_static_web_apps/create_static_web_app.zsh \
+  --resource-group rg-agent86-dev \
+  --name swa-agent86-dev \
+  --show-deployment-token
+```
+
+### Post-deployment checklist
+
+After the first Azure deploy, verify and update:
+
+- backend CORS to include the Static Web App hostname
+- Entra redirect URIs to include the Static Web App URL
+- API app settings and secrets for Cosmos, Blob Storage, auth, and model providers
+- internal service discovery assumptions for Container Apps internal URLs
+- Azure CLI / Container Apps extension compatibility if `az containerapp update` behavior differs in your local environment
+
+### Relevant deployment helpers
+
+- `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_deploy/provision_agent86_dev_hosting.zsh`
+- `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/deploy_agent86_services.zsh`
+- `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/print_container_app_env.zsh`
+- `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_static_web_apps/create_static_web_app.zsh`
+- `/Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_static_web_apps/print_frontend_deploy_env.zsh`
 
 ### 5. Open the API docs
 

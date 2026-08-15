@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run backend tests
+        working-directory: backend
+        env:
+          COSMOS_ENDPOINT: https://example.documents.azure.com:443/
+          COSMOS_KEY: test-cosmos-key
+          COSMOS_DATABASE_NAME: agent86-test
+          AZURE_BLOB_CONNECTION_STRING: UseDevelopmentStorage=true
+          AZURE_BLOB_CONTAINER_NAME: agent86-test-artifacts
+          FOUNDRY_OPENAI_BASE_URL: https://example.openai.azure.com/
+          FOUNDRY_OPENAI_API_KEY: test-openai-key
+          FOUNDRY_DEFAULT_CHAT_MODEL: gpt-4.1-mini
+          FOUNDRY_PREMIUM_CHAT_MODEL: gpt-5.4
+          ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000001
+          ENTRA_API_CLIENT_ID: 00000000-0000-0000-0000-000000000002
+          ENTRA_API_AUDIENCE: api://00000000-0000-0000-0000-000000000002
+        run: pytest
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000003
+          VITE_ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000001
+          VITE_REDIRECT_URI: http://localhost:5173
+          VITE_API_SCOPE: api://00000000-0000-0000-0000-000000000002/access_as_user
+          VITE_API_BASE_URL: http://localhost:8000
+        run: npm run build
+
+      - name: Validate zsh scripts
+        run: find common/scripts -type f -name '*.zsh' -print0 | xargs -0 -n1 zsh -n
+
+      - name: Validate backend API Docker build
+        run: docker build -f backend/Dockerfile.api backend
