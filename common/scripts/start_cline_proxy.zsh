@@ -13,4 +13,4 @@ fi
 
 "${BACKEND_VENV}/bin/python" -m uvicorn \
   --app-dir "${REPO_ROOT}/common/utils/cline" \
-  cline_proxy:app --port 8787
+  cline_proxy:app --port 8787 > proxy.log 2>&1
