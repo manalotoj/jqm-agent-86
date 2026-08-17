@@ -318,14 +318,18 @@ For GitHub Actions:
 - if `BACKEND_ENV_API_DEV` is not set, the workflow falls back to an existing `backend/.env.api` file in the workspace
 - if neither exists, the Key Vault import step is skipped with a clear workflow summary message
 
+This repo's Azure deployment workflows assume GitHub-hosted runners plus GitHub OpenID Connect (OIDC) federation into Azure. They do not assume a self-hosted runner in Azure with an attached managed identity.
+
 Recommended setup for the `dev` GitHub Environment:
 
-- OIDC / Azure login secrets:
+- secret values:
+  - `BACKEND_ENV_API_DEV`
+- non-secret Azure OIDC identifiers / config variables:
   - `AZURE_CLIENT_ID`
   - `AZURE_TENANT_ID`
   - `AZURE_SUBSCRIPTION_ID`
-- backend env content secret:
-  - `BACKEND_ENV_API_DEV`
+
+Why `AZURE_CLIENT_ID` is still required: with GitHub-hosted runners, `azure/login@v2` uses GitHub's OIDC token to authenticate as a specific Azure identity. `AZURE_CLIENT_ID` tells Azure which app registration or user-assigned managed identity should receive that federated sign-in. No Azure client secret is required, but the client ID is still needed.
 
 Example `BACKEND_ENV_API_DEV` secret value:
 
@@ -476,6 +480,12 @@ That helper provisions or reuses:
 - Azure Container Apps Environment
 - Azure Static Web App
 
+Region note:
+
+- if the target resource group is in `westus`, the Static Web App helper automatically provisions the SWA resource in `westus2`
+- this is intentional because Azure Static Web Apps are not available in `westus`
+- the other shared resources can still remain in the resource group's own region
+
 You must already be logged into Azure CLI:
 
 ```bash
@@ -512,13 +522,17 @@ Use this checklist before your first real GitHub-hosted Azure deployment.
 
 #### 1. Create or choose an Azure identity for GitHub OIDC
 
-Create an Azure app registration or user-assigned managed identity that GitHub Actions will use to log into Azure.
+Create an Azure app registration or user-assigned managed identity that GitHub Actions will use to log into Azure from a GitHub-hosted runner.
+
+This repo assumes GitHub-hosted runners using OIDC federation. It does not assume a self-hosted runner running on Azure compute with a system-assigned managed identity.
 
 Required values to capture for GitHub:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
+
+`AZURE_CLIENT_ID` is still required in this model because it identifies the Azure principal that GitHub OIDC should sign in as. The benefit of OIDC here is that you do not need to store an Azure client secret in GitHub.
 
 That identity must have enough RBAC in the target subscription or resource group to:
 
@@ -556,12 +570,15 @@ In the repository settings, create an Environment named `dev`.
 
 Add these required secrets:
 
+- `BACKEND_ENV_API_DEV`
+
+Add these required environment variables expected by the current workflows for Azure OIDC login:
+
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `BACKEND_ENV_API_DEV`
 
-Add these required environment variables used by the deploy workflows:
+Add these required environment variables used by the deploy workflows as application/runtime configuration:
 
 - `ENTRA_TENANT_ID`
 - `ENTRA_API_CLIENT_ID`
@@ -748,6 +765,11 @@ zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_static_w
   --name swa-agent86-dev \
   --show-deployment-token
 ```
+
+Region behavior note:
+
+- when the resource group location is `westus`, `create_static_web_app.zsh` automatically uses `westus2` for the Static Web App resource
+- if you pass a supported SWA region explicitly with `--location`, that explicit value is used instead
 
 ### Post-deployment checklist
 

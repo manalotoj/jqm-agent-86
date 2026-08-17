@@ -8,6 +8,18 @@ STATIC_WEB_APP_NAME="swa-agent86-dev"
 SKU="Standard"
 SHOW_DEPLOYMENT_TOKEN=false
 
+normalize_static_web_app_location() {
+  local requested_location="$1"
+  case "$requested_location" in
+    westus)
+      printf '%s\n' "westus2"
+      ;;
+    *)
+      printf '%s\n' "$requested_location"
+      ;;
+  esac
+}
+
 usage() {
   cat <<EOF
 Usage: $SCRIPT_NAME --resource-group <name> [options]
@@ -80,6 +92,13 @@ if [[ -z "$LOCATION" ]]; then
 fi
 
 [[ -n "$LOCATION" ]] || fail "Could not resolve Azure location"
+
+RAW_LOCATION="$LOCATION"
+LOCATION=$(normalize_static_web_app_location "$LOCATION")
+
+if [[ "$RAW_LOCATION" != "$LOCATION" ]]; then
+  echo "Static Web Apps are not available in '$RAW_LOCATION'; using '$LOCATION' instead."
+fi
 
 echo "Preparing Azure Static Web App '$STATIC_WEB_APP_NAME' in resource group '$RESOURCE_GROUP' (location: $LOCATION)..."
 
