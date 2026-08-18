@@ -10,7 +10,7 @@ on:
       location:
         description: Azure region used when creating missing resources
         required: false
-        default: eastus2
+        default: westus
       cosmos_account_name:
         description: Optional explicit Cosmos DB account name
         required: false

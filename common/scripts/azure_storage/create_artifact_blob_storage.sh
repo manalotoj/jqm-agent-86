@@ -31,8 +31,8 @@ Optional:
 Generated account names are deterministic per subscription and environment so
 the script can be re-run safely.
 
-The resulting connection strings are printed after each storage account is
-provisioned. Treat them as secrets.
+The resulting storage account and blob container names are printed after
+provisioning completes.
 EOF
 }
 
@@ -112,7 +112,8 @@ if [[ -z "$SUBSCRIPTION_SUFFIX" ]]; then
 fi
 
 ENVIRONMENTS=()
-for raw_environment in ${(s:,:)ENVIRONMENTS_CSV}; do
+IFS=',' read -r -a raw_environments <<< "$ENVIRONMENTS_CSV"
+for raw_environment in "${raw_environments[@]}"; do
   environment=$(trim "$raw_environment")
   [[ -n "$environment" ]] || continue
   sanitized_environment=$(echo "$environment" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')
@@ -164,6 +165,8 @@ create_container_if_missing() {
 echo "Preparing Azure Blob Storage resources in resource group '$RESOURCE_GROUP' (location: $LOCATION)..."
 echo ""
 
+RESULTING_RESOURCES=()
+
 for environment in "${ENVIRONMENTS[@]}"; do
   account_name=$(build_account_name "$environment")
 
@@ -203,21 +206,19 @@ for environment in "${ENVIRONMENTS[@]}"; do
 
   create_container_if_missing "$account_name" "$account_key"
 
-  connection_string=$(az storage account show-connection-string \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$account_name" \
-    --query connectionString \
-    --output tsv)
-
   echo "[$environment] Ready."
   echo "  Resource Group             : $RESOURCE_GROUP"
   echo "  Location                   : $LOCATION"
   echo "  Storage Account            : $account_name"
   echo "  Blob Container             : $CONTAINER_NAME"
-  echo "  Suggested env values:"
-  echo "    AZURE_BLOB_CONNECTION_STRING=$connection_string"
-  echo "    AZURE_BLOB_CONTAINER_NAME=$CONTAINER_NAME"
   echo ""
+
+  RESULTING_RESOURCES+=("$environment|$account_name|$CONTAINER_NAME")
 done
 
 echo "Completed Azure Blob Storage provisioning."
+echo "Resulting resources:"
+for resource in "${RESULTING_RESOURCES[@]}"; do
+  IFS='|' read -r environment account_name container_name <<< "$resource"
+  echo "  Environment '$environment': storage account '$account_name', blob container '$container_name'"
+done
