@@ -48,7 +48,7 @@ jobs:
 
       - name: Provision hosting resources
         run: >-
-          zsh "${{ github.workspace }}/common/scripts/azure_deploy/provision_agent86_dev_hosting.zsh"
+          bash "${{ github.workspace }}/common/scripts/azure_deploy/provision_agent86_dev_hosting.sh"
           --resource-group "${{ inputs.resource_group }}"
           --location "${{ inputs.location }}"
 
@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           cmd=(
-            zsh "${{ github.workspace }}/common/scripts/cosmos_db/ensure_agent86_cosmos.zsh"
+            bash "${{ github.workspace }}/common/scripts/cosmos_db/ensure_agent86_cosmos.sh"
             --resource-group "${{ inputs.resource_group }}"
             --location "${{ inputs.location }}"
           )
@@ -68,14 +68,14 @@ jobs:
 
       - name: Ensure artifact blob storage
         run: >-
-          zsh "${{ github.workspace }}/common/scripts/azure_storage/create_artifact_blob_storage.zsh"
+          bash "${{ github.workspace }}/common/scripts/azure_storage/create_artifact_blob_storage.sh"
           --resource-group "${{ inputs.resource_group }}"
           --location "${{ inputs.location }}"
           --environments dev
 
       - name: Ensure Application Insights
         run: >-
-          zsh "${{ github.workspace }}/common/scripts/azure_monitor/create_application_insights.zsh"
+          bash "${{ github.workspace }}/common/scripts/azure_monitor/create_application_insights.sh"
           --resource-group "${{ inputs.resource_group }}"
           --location "${{ inputs.location }}"
           --workspace-name law-agent86-dev
@@ -88,7 +88,7 @@ jobs:
           if [[ -n "${{ inputs.key_vault_name }}" ]]; then
             args+=(--name "${{ inputs.key_vault_name }}")
           fi
-          output=$(zsh "${{ github.workspace }}/common/scripts/azure_key_vault/create_key_vault.zsh" "${args[@]}")
+          output=$(bash "${{ github.workspace }}/common/scripts/azure_key_vault/create_key_vault.sh" "${args[@]}")
           echo "$output"
 
       - name: Resolve reconciled resource metadata
@@ -189,7 +189,7 @@ jobs:
           set -euo pipefail
           env_file="${{ github.workspace }}/backend/.env.api"
           if [[ -f "$env_file" ]]; then
-            zsh "${{ github.workspace }}/common/scripts/azure_key_vault/import_env_to_key_vault.zsh" \
+            bash "${{ github.workspace }}/common/scripts/azure_key_vault/import_env_to_key_vault.sh" \
               --key-vault-name "${{ steps.resolve.outputs.key_vault_name }}" \
               --env-file "$env_file"
           else

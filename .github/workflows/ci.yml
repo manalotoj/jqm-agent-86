@@ -56,8 +56,8 @@ jobs:
           VITE_API_BASE_URL: http://localhost:8000
         run: npm run build
 
-      - name: Validate zsh scripts
-        run: find common/scripts -type f -name '*.zsh' -print0 | xargs -0 -n1 zsh -n
+      - name: Validate workflow Bash scripts
+        run: find common/scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
       - name: Validate backend API Docker build
         run: docker build -f backend/Dockerfile.api backend

@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           cmd=(
-            zsh "${{ github.workspace }}/common/scripts/azure_container_apps/deploy_agent86_services.zsh"
+            bash "${{ github.workspace }}/common/scripts/azure_container_apps/deploy_agent86_services.sh"
             --resource-group "${{ inputs.resource_group }}"
             --image-tag "${{ inputs.image_tag }}"
             --api-env "APP_NAME=agent-86"
