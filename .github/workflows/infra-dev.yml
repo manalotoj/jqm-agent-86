@@ -122,7 +122,7 @@ jobs:
           cosmos_account_name=$(require_single_name "Cosmos DB account" az cosmosdb list --resource-group "$rg" --query '[].name' --output tsv)
           static_web_app_name=$(require_single_name "Static Web App" az staticwebapp list --resource-group "$rg" --query '[].name' --output tsv)
           storage_account_name=$(require_single_name "Storage account matching agent86" az storage account list --resource-group "$rg" --query "[?contains(name, 'agent86')].name" --output tsv)
-          app_insights_name=$(require_single_name "Application Insights" az monitor app-insights component list --resource-group "$rg" --query '[].name' --output tsv)
+          app_insights_name=$(require_single_name "Application Insights" az resource list --resource-group "$rg" --resource-type Microsoft.Insights/components --query '[].name' --output tsv)
 
           cosmos_endpoint=$(az cosmosdb show --resource-group "$rg" --name "$cosmos_account_name" --query documentEndpoint --output tsv)
           static_web_app_hostname=$(az staticwebapp show --resource-group "$rg" --name "$static_web_app_name" --query defaultHostname --output tsv)
