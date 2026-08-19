@@ -86,7 +86,12 @@ fi
 echo "Preparing Azure Container Registry '$REGISTRY_NAME' in resource group '$RESOURCE_GROUP' (location: $LOCATION)..."
 
 if az acr show --resource-group "$RESOURCE_GROUP" --name "$REGISTRY_NAME" --output none >/dev/null 2>&1; then
-  echo "Container registry already exists; reusing it."
+  echo "Container registry already exists; ensuring its admin user is enabled."
+  az acr update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$REGISTRY_NAME" \
+    --admin-enabled true \
+    --output none
 else
   availability=$(az acr check-name --name "$REGISTRY_NAME" --query nameAvailable --output tsv)
   if [[ "$availability" != "true" ]]; then
