@@ -182,7 +182,7 @@ for secret in "${SECRETS[@]}"; do
   ENV_ASSIGNMENTS+=("$key=secretref:$secret_name")
 done
 
-COMMON_ARGS=(
+CREATE_ARGS=(
   --name "$APP_NAME"
   --resource-group "$RESOURCE_GROUP"
   --environment "$ENVIRONMENT_NAME"
@@ -198,24 +198,42 @@ COMMON_ARGS=(
   --output none
 )
 
+# Environment, ingress, registry, and identity are creation-time configuration.
+# Passing those create-only arguments to `az containerapp update` causes the CLI
+# extension to submit an invalid update payload for an existing app.
+UPDATE_ARGS=(
+  --name "$APP_NAME"
+  --resource-group "$RESOURCE_GROUP"
+  --image "$IMAGE"
+  --cpu "$CPU"
+  --memory "$MEMORY"
+  --min-replicas "$MIN_REPLICAS"
+  --max-replicas "$MAX_REPLICAS"
+  --output none
+)
+
 if (( ${#ENV_ASSIGNMENTS[@]} > 0 )); then
-  COMMON_ARGS+=(--env-vars)
-  COMMON_ARGS+=("${ENV_ASSIGNMENTS[@]}")
+  CREATE_ARGS+=(--env-vars)
+  CREATE_ARGS+=("${ENV_ASSIGNMENTS[@]}")
+  UPDATE_ARGS+=(--env-vars)
+  UPDATE_ARGS+=("${ENV_ASSIGNMENTS[@]}")
 fi
 
 if (( ${#SECRET_ASSIGNMENTS[@]} > 0 )); then
-  COMMON_ARGS+=(--secrets)
-  COMMON_ARGS+=("${SECRET_ASSIGNMENTS[@]}")
+  CREATE_ARGS+=(--secrets)
+  CREATE_ARGS+=("${SECRET_ASSIGNMENTS[@]}")
+  UPDATE_ARGS+=(--secrets)
+  UPDATE_ARGS+=("${SECRET_ASSIGNMENTS[@]}")
 fi
 
 echo "Preparing Azure Container App '$APP_NAME'..."
 
 if az containerapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none >/dev/null 2>&1; then
   echo "Container App already exists; updating it."
-  az containerapp update "${COMMON_ARGS[@]}"
+  az containerapp update "${UPDATE_ARGS[@]}"
 else
   echo "Creating Container App '$APP_NAME'..."
-  az containerapp create "${COMMON_ARGS[@]}"
+  az containerapp create "${CREATE_ARGS[@]}"
 fi
 
 PRINCIPAL_ID=$(az containerapp show \
