@@ -215,21 +215,26 @@ UPDATE_ARGS=(
 if (( ${#ENV_ASSIGNMENTS[@]} > 0 )); then
   CREATE_ARGS+=(--env-vars)
   CREATE_ARGS+=("${ENV_ASSIGNMENTS[@]}")
-  UPDATE_ARGS+=(--env-vars)
+  UPDATE_ARGS+=(--replace-env-vars)
   UPDATE_ARGS+=("${ENV_ASSIGNMENTS[@]}")
 fi
 
 if (( ${#SECRET_ASSIGNMENTS[@]} > 0 )); then
   CREATE_ARGS+=(--secrets)
   CREATE_ARGS+=("${SECRET_ASSIGNMENTS[@]}")
-  UPDATE_ARGS+=(--secrets)
-  UPDATE_ARGS+=("${SECRET_ASSIGNMENTS[@]}")
 fi
 
 echo "Preparing Azure Container App '$APP_NAME'..."
 
 if az containerapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none >/dev/null 2>&1; then
   echo "Container App already exists; updating it."
+  if (( ${#SECRET_ASSIGNMENTS[@]} > 0 )); then
+    az containerapp secret set \
+      --name "$APP_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --secrets "${SECRET_ASSIGNMENTS[@]}" \
+      --output none
+  fi
   az containerapp update "${UPDATE_ARGS[@]}"
 else
   echo "Creating Container App '$APP_NAME'..."
