@@ -1741,7 +1741,7 @@ function AuthenticatedApp() {
 
       <AlertDialog
         open={Boolean(sessionToDelete)}
-        onOpenChange={(open) => {
+        onOpenChange={(open: boolean) => {
           if (!open) {
             setSessionToDelete(null);
           }
