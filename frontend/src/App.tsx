@@ -17,6 +17,8 @@ import {
 import {
   Bot,
   CheckCircle2,
+  Check,
+  Copy,
   PanelLeft,
   PanelRight,
   Download,
@@ -79,6 +81,11 @@ import {
   useUpdateSession,
 } from "@/hooks/useSessions";
 import { cn } from "@/lib/utils";
+import {
+  loadComposerPreferences,
+  saveComposerPreferences,
+  type ComposerModel,
+} from "@/lib/composerPreferences";
 import type { Artifact } from "@/types/artifact";
 import type { Message } from "@/types/message";
 import type { Session } from "@/types/session";
@@ -93,7 +100,6 @@ const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_ARTIFACTS: Artifact[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 
-type ComposerModel = typeof DEFAULT_CHAT_MODEL | typeof PREMIUM_CHAT_MODEL;
 type NoticeTone = "success" | "error" | "info";
 type MainContentView = "chat" | "summary";
 
@@ -395,12 +401,46 @@ function MessageBubble({
   downloadingArtifactId: string | null;
 }) {
   const isUser = message.role === "user";
+  const [isCopied, setIsCopied] = useState(false);
   const model = getAssistantModel(message);
   const tools = getAssistantTools(message);
   const artifactIds = getMessageArtifactIds(message);
   const resolvedArtifacts = artifactIds
     .map((artifactId) => attachedArtifacts.find((artifact) => artifact.id === artifactId) ?? null)
     .filter((artifact): artifact is Artifact => artifact !== null);
+
+  const handleCopy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(message.content);
+          setIsCopied(true);
+          window.setTimeout(() => setIsCopied(false), 2_000);
+          return;
+        } catch {
+          // Fall back to the legacy copy mechanism when clipboard permission is denied.
+        }
+      }
+
+      const textArea = document.createElement("textarea");
+      textArea.value = message.content;
+      textArea.setAttribute("readonly", "");
+      textArea.className = "fixed -left-full top-0 opacity-0";
+      document.body.append(textArea);
+      textArea.select();
+      const wasCopied = document.execCommand("copy");
+      textArea.remove();
+
+      if (!wasCopied) {
+        throw new Error("The browser could not copy the message.");
+      }
+
+      setIsCopied(true);
+      window.setTimeout(() => setIsCopied(false), 2_000);
+    } catch {
+      setIsCopied(false);
+    }
+  };
 
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
@@ -433,6 +473,23 @@ function MessageBubble({
                 {model}
               </span>
             ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className={cn("ml-auto", isUser && "text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground")}
+                  aria-label={`Copy ${isUser ? "user" : "assistant"} message`}
+                  onClick={() => {
+                    void handleCopy();
+                  }}
+                >
+                  {isCopied ? <Check className="size-3" /> : <Copy className="size-3" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{isCopied ? "Copied" : "Copy message"}</TooltipContent>
+            </Tooltip>
           </div>
           {isUser ? (
             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-primary-foreground">
@@ -520,8 +577,12 @@ function AuthenticatedApp() {
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const [draftMessage, setDraftMessage] = useState("");
-  const [selectedModel, setSelectedModel] = useState<ComposerModel>(DEFAULT_CHAT_MODEL);
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<ComposerModel>(
+    () => loadComposerPreferences(activeUserId).selectedModel,
+  );
+  const [webSearchEnabled, setWebSearchEnabled] = useState(
+    () => loadComposerPreferences(activeUserId).webSearchEnabled,
+  );
   const [chatError, setChatError] = useState<string | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
   const [isStreamingActive, setIsStreamingActive] = useState(false);
@@ -595,6 +656,28 @@ function AuthenticatedApp() {
     const noticeId = crypto.randomUUID();
 
     setNotices((current) => [...current.slice(-2), { id: noticeId, message, tone }]);
+  };
+
+  useEffect(() => {
+    const preferences = loadComposerPreferences(activeUserId);
+
+    setSelectedModel(preferences.selectedModel);
+    setWebSearchEnabled(preferences.webSearchEnabled);
+  }, [activeUserId]);
+
+  const handleSelectedModelChange = (model: ComposerModel) => {
+    setSelectedModel(model);
+    saveComposerPreferences(activeUserId, { selectedModel: model, webSearchEnabled });
+  };
+
+  const handleWebSearchToggle = () => {
+    const nextWebSearchEnabled = !webSearchEnabled;
+
+    setWebSearchEnabled(nextWebSearchEnabled);
+    saveComposerPreferences(activeUserId, {
+      selectedModel,
+      webSearchEnabled: nextWebSearchEnabled,
+    });
   };
 
   useEffect(() => {
@@ -1292,7 +1375,7 @@ function AuthenticatedApp() {
                         type="button"
                         variant={selectedModel === option.value ? "default" : "outline"}
                         size="sm"
-                        onClick={() => setSelectedModel(option.value)}
+                        onClick={() => handleSelectedModelChange(option.value)}
                       >
                         <WandSparkles className="size-4" />
                         {option.label}
@@ -1302,7 +1385,7 @@ function AuthenticatedApp() {
                       type="button"
                       variant={webSearchEnabled ? "default" : "outline"}
                       size="sm"
-                      onClick={() => setWebSearchEnabled((current) => !current)}
+                      onClick={handleWebSearchToggle}
                     >
                       <Sparkles className="size-4" />
                       Web search {webSearchEnabled ? "on" : "off"}
