@@ -707,6 +707,74 @@ You will likely need to provide your real backend/runtime settings for:
 - telemetry / monitoring
 - any provider credentials used by tools
 
+#### Backend runtime configuration flow
+
+The Azure deployment path keeps application configuration separate from secret material. The same setting names are used locally and in Azure; only the source of each value changes.
+
+1. `infra-dev.yml` provisions or reconciles Azure resources, including Application Insights, then writes infrastructure-derived secrets to Key Vault.
+2. `deploy-backend-dev.yml` reads the required Key Vault secrets and Azure resource metadata, combines them with GitHub `dev` Environment variables, and calls `deploy_agent86_services.sh`.
+3. `deploy_agent86_services.sh` calls `create_container_app.sh` for each service.
+4. For a new Container App, `create_container_app.sh` uses `az containerapp create --env-vars` and `--secrets`. For an existing app, it first updates secrets with `az containerapp secret set --secrets`, then applies the declared environment with `az containerapp update --replace-env-vars`.
+5. Secret-backed environment variables are configured as `secretref:<secret-name>`. The secret value is stored separately in the Container App and is not placed in the revision template as a literal value.
+
+| Configuration category | Examples | Source during GitHub deployment | Container App representation |
+| --- | --- | --- | --- |
+| Azure resource metadata | `COSMOS_ENDPOINT`, storage/container names | Azure resource queries and workflow literals | Literal environment variable |
+| GitHub Environment variables | `ENTRA_TENANT_ID`, `ENTRA_API_CLIENT_ID`, Foundry endpoint and model names | GitHub `dev` Environment variables | Literal environment variable |
+| Runtime secrets | `COSMOS_KEY`, `AZURE_BLOB_CONNECTION_STRING`, `FOUNDRY_OPENAI_API_KEY` | Azure Key Vault | Container App secret plus `secretref:` environment variable |
+| Monitoring secret | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Application Insights connection string stored in Key Vault as `applicationinsights-connection-string` | Container App secret plus `secretref:` environment variable when available |
+| Application defaults | `OTEL_SERVICE_NAME=agent-86-api`, `APP_ENV=dev` | Backend settings defaults and workflow configuration | Default or literal environment variable |
+
+Application Insights telemetry is enabled only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is present. The backend assigns the OpenTelemetry resource attributes `service.name`, `deployment.environment`, and, when configured, `service.version`. `OTEL_SERVICE_NAME`, `OTEL_ENVIRONMENT`, and `OTEL_SERVICE_VERSION` can override their corresponding defaults.
+
+Do not add connection strings, API keys, or other secret values to repository files, workflow output, pull-request comments, or support tickets. Use Key Vault and Container App secret references for deployed environments.
+
+#### Inspect and troubleshoot deployed backend configuration
+
+Set the resource group and API app name, then use the following commands. They display environment-variable metadata, revision state, and logs without requesting secret values.
+
+```bash
+RESOURCE_GROUP=rg-agent86-dev
+APP_NAME=aca-agent86-api-dev
+
+# Environment variable names, literal values, and secret references.
+az containerapp show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query "properties.template.containers[0].env[].{name:name,value:value,secretRef:secretRef}" \
+  --output table
+
+# Secret names only. Do not print secret values in a shared shell or CI log.
+az containerapp secret list \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query "[].name" \
+  --output table
+
+# Active and previous revision health/state.
+az containerapp revision list \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --output table
+
+# Recent application console logs.
+az containerapp logs show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --type console \
+  --tail 100
+```
+
+Use the repository helper to print the app name, FQDN, and external URL:
+
+```bash
+zsh /Users/johnmanaloto/source/github/jqm-agent-86/common/scripts/azure_container_apps/print_container_app_env.zsh \
+  --resource-group rg-agent86-dev \
+  --app-name aca-agent86-api-dev
+```
+
+In the Azure portal, open **Container Apps** > **aca-agent86-api-dev**. Use **Revisions and replicas** to inspect the active revision and replica health, **Environment variables** to see literals and secret references, **Secrets** to see secret names, and **Log stream** or **Logs** to diagnose startup failures. Use the associated Application Insights resource to verify telemetry after the API recovers. Existing Container App secret values are intentionally not exposed through normal inspection views; retrieve a source secret from Key Vault only when your role permits it and keep the value out of logs.
+
 ### Inspect deployed Container App URLs
 
 After deployment, you can print useful values from a Container App:

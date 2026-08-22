@@ -7,6 +7,7 @@ def configure_telemetry(settings: Settings) -> None:
 
     try:
         from azure.monitor.opentelemetry import configure_azure_monitor
+        from opentelemetry.sdk.resources import Resource
     except ImportError:
         return
 
@@ -19,6 +20,6 @@ def configure_telemetry(settings: Settings) -> None:
 
     configure_azure_monitor(
         connection_string=settings.applicationinsights_connection_string,
-        resource=resource_attributes,
+        resource=Resource.create(resource_attributes),
         logger_name="agent_86",
     )
