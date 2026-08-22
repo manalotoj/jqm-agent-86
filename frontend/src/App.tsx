@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 
 import { streamChat } from "@/api/chat";
+import { MarkdownMessage } from "@/components/MarkdownMessage";
 import { SessionSummaryCard } from "@/components/SessionSummaryCard";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -433,9 +434,15 @@ function MessageBubble({
               </span>
             ) : null}
           </div>
-          <p className={cn("mt-2 whitespace-pre-wrap text-sm leading-6", isUser && "text-primary-foreground")}>
-            {message.content || "…"}
-          </p>
+          {isUser ? (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-primary-foreground">
+              {message.content || "…"}
+            </p>
+          ) : message.content ? (
+            <MarkdownMessage content={message.content} />
+          ) : (
+            <p className="mt-2 text-sm leading-6">…</p>
+          )}
           {isUser && resolvedArtifacts.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {resolvedArtifacts.map((artifact) => {
