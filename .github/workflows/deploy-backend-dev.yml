@@ -8,9 +8,8 @@ on:
         required: false
         default: rg-agent86-dev
       image_tag:
-        description: Image tag to deploy
+        description: Optional image tag to deploy (defaults to the triggering commit SHA)
         required: false
-        default: dev
       deploy_mcp:
         description: Deploy MCP container app
         required: false
@@ -34,6 +33,18 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve image tag
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="${{ inputs.image_tag }}"
+          if [[ -z "$image_tag" ]]; then
+            image_tag="${GITHUB_SHA::12}"
+          fi
+          echo "tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "Deploying immutable image tag: $image_tag"
 
       - name: Resolve resource names and secrets
         id: resolve
@@ -141,7 +152,7 @@ jobs:
           cmd=(
             bash "${{ github.workspace }}/common/scripts/azure_container_apps/deploy_agent86_services.sh"
             --resource-group "${{ inputs.resource_group }}"
-            --image-tag "${{ inputs.image_tag }}"
+            --image-tag "${{ steps.image.outputs.tag }}"
             --api-env "APP_NAME=agent-86"
             --api-env "APP_ENV=dev"
             --api-env "CORS_ALLOWED_ORIGINS=https://swa-agent86-dev.azurestaticapps.net"

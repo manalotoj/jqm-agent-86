@@ -40,3 +40,24 @@ def test_configure_telemetry_passes_an_opentelemetry_resource(
     assert resource.attributes["service.version"] == "test-version"
     assert configure_monitor.call_args.kwargs["connection_string"] == "InstrumentationKey=test-key"
     assert configure_monitor.call_args.kwargs["logger_name"] == "agent_86"
+
+
+def test_configure_telemetry_allows_application_startup_when_monitor_configuration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        applicationinsights_connection_string="InstrumentationKey=test-key",
+        otel_service_name="agent-86-api",
+        otel_environment=None,
+        app_env="dev",
+        otel_service_version=None,
+    )
+
+    configure_monitor = MagicMock(side_effect=RuntimeError("monitor unavailable"))
+    azure_monitor_module = ModuleType("azure.monitor.opentelemetry")
+    azure_monitor_module.configure_azure_monitor = configure_monitor
+    monkeypatch.setitem(sys.modules, "azure.monitor.opentelemetry", azure_monitor_module)
+
+    configure_telemetry(settings)
+
+    configure_monitor.assert_called_once()
