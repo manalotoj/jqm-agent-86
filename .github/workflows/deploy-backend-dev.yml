@@ -101,6 +101,8 @@ jobs:
           kv_name=$(require_single_name "Key Vault" az keyvault list --resource-group "$rg" --query '[].name' --output tsv)
           cosmos_account=$(require_single_name "Cosmos DB account" az cosmosdb list --resource-group "$rg" --query '[].name' --output tsv)
           storage_account=$(require_single_name "Storage account matching agent86" az storage account list --resource-group "$rg" --query "[?contains(name, 'agent86')].name" --output tsv)
+          swa_name=$(require_single_name "Static Web App" az staticwebapp list --resource-group "$rg" --query '[].name' --output tsv)
+          swa_hostname=$(az staticwebapp show --resource-group "$rg" --name "$swa_name" --query defaultHostname --output tsv)
           cosmos_key=$(az keyvault secret show --vault-name "$kv_name" --name cosmos-key --query value --output tsv)
           blob_connection_string=$(az keyvault secret show --vault-name "$kv_name" --name azure-blob-connection-string --query value --output tsv)
           foundry_api_key=$(az keyvault secret show --vault-name "$kv_name" --name foundry-openai-api-key --query value --output tsv)
@@ -108,6 +110,7 @@ jobs:
           cosmos_endpoint=$(az cosmosdb show --resource-group "$rg" --name "$cosmos_account" --query documentEndpoint --output tsv)
           echo "storage_account=$storage_account" >> "$GITHUB_OUTPUT"
           echo "kv_name=$kv_name" >> "$GITHUB_OUTPUT"
+          echo "swa_hostname=$swa_hostname" >> "$GITHUB_OUTPUT"
           echo "cosmos_endpoint=$cosmos_endpoint" >> "$GITHUB_OUTPUT"
           echo "cosmos_key=$cosmos_key" >> "$GITHUB_OUTPUT"
           echo "blob_connection_string=$blob_connection_string" >> "$GITHUB_OUTPUT"
@@ -155,7 +158,7 @@ jobs:
             --image-tag "${{ steps.image.outputs.tag }}"
             --api-env "APP_NAME=agent-86"
             --api-env "APP_ENV=dev"
-            --api-env "CORS_ALLOWED_ORIGINS=https://swa-agent86-dev.azurestaticapps.net"
+            --api-env "CORS_ALLOWED_ORIGINS=https://${{ steps.resolve.outputs.swa_hostname }}"
             --api-env "ENTRA_TENANT_ID=${{ vars.ENTRA_TENANT_ID }}"
             --api-env "ENTRA_API_CLIENT_ID=${{ vars.ENTRA_API_CLIENT_ID }}"
             --api-env "ENTRA_API_AUDIENCE=${{ vars.ENTRA_API_AUDIENCE }}"
@@ -207,4 +210,18 @@ jobs:
           }
 
           api_url=$(az containerapp show --resource-group "${{ inputs.resource_group }}" --name aca-agent86-api-dev --query properties.configuration.ingress.fqdn --output tsv)
-          curl -fsS "https://$api_url/health" || curl -fsS "https://$api_url/docs" >/dev/null
+          curl --connect-timeout 10 --max-time 30 -fsS "https://$api_url/health" || \
+            curl --connect-timeout 10 --max-time 30 -fsS "https://$api_url/docs" >/dev/null
+
+      - name: Smoke test backend CORS preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_url=$(az containerapp show --resource-group "${{ inputs.resource_group }}" --name aca-agent86-api-dev --query properties.configuration.ingress.fqdn --output tsv)
+          origin="https://${{ steps.resolve.outputs.swa_hostname }}"
+          headers=$(curl --connect-timeout 10 --max-time 30 --fail --silent --show-error --head --request OPTIONS "https://$api_url/sessions" \
+            --header "Origin: $origin" \
+            --header "Access-Control-Request-Method: GET" \
+            --header "Access-Control-Request-Headers: authorization,content-type")
+          echo "$headers"
+          grep --ignore-case --fixed-strings --quiet "access-control-allow-origin: $origin" <<< "$headers"
