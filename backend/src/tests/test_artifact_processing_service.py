@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from agent_86.domain.models.artifact import Artifact
@@ -95,6 +97,20 @@ class FailingAnalysisFindingsStorage(InMemoryBlobStorage):
         if "/analysis/" in blob_name:
             raise RuntimeError("analysis findings storage unavailable")
         await super().upload_blob(blob_name, content, content_type)
+
+
+class BlockingAnalysisDownloadStorage(InMemoryBlobStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.download_started = asyncio.Event()
+        self.release_download = asyncio.Event()
+        self.download_count = 0
+
+    async def download_blob(self, blob_name):
+        self.download_count += 1
+        self.download_started.set()
+        await self.release_download.wait()
+        return await super().download_blob(blob_name)
 
 
 @pytest.mark.asyncio
@@ -239,3 +255,26 @@ async def test_analysis_records_failed_when_oversized_findings_cannot_be_stored(
 
     assert job.state == "failed"
     assert job.error_detail == "Unable to store analysis findings: analysis findings storage unavailable"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_analysis_requests_execute_a_job_once() -> None:
+    derived = BlockingAnalysisDownloadStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\n"), InMemoryManifestRepository(), derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=1),
+    )
+    manifest = await processing.process_artifact(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+    repository = InMemoryAnalysisJobRepository()
+    service = ArtifactAnalysisService(processing, repository, derived)
+
+    first = asyncio.create_task(service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1"))
+    await derived.download_started.wait()
+    second = asyncio.create_task(service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1"))
+    derived.release_download.set()
+    first_job, second_job = await asyncio.gather(first, second)
+
+    assert manifest.chunks_blob_name is not None
+    assert derived.download_count == 1
+    assert first_job.id == second_job.id
+    assert first_job.state == second_job.state == "completed"
