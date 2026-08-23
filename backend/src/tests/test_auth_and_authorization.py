@@ -234,6 +234,7 @@ class InMemoryProcessingRepository:
 class InMemoryAnalysisJobRepository:
     def __init__(self) -> None:
         self._jobs = {}
+        self._chunk_results = {}
 
     async def get_job(self, user_id, session_id, job_id):
         return self._jobs.get((user_id, session_id, job_id))
@@ -252,6 +253,17 @@ class InMemoryAnalysisJobRepository:
     async def upsert_job(self, job):
         self._jobs[(job.user_id, job.session_id, job.id)] = job
         return job
+
+    async def list_chunk_results(self, user_id, session_id, job_id):
+        return sorted(
+            [result for (owner, session, result_job_id, _), result in self._chunk_results.items()
+             if (owner, session, result_job_id) == (user_id, session_id, job_id)],
+            key=lambda result: result.chunk_index,
+        )
+
+    async def upsert_chunk_result(self, result):
+        self._chunk_results[(result.user_id, result.session_id, result.job_id, result.chunk_index)] = result
+        return result
 
 
 class InMemorySessionSummaryRepository:

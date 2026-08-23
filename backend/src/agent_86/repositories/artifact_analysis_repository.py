@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from agent_86.domain.models.artifact_analysis import ArtifactAnalysisJob, ArtifactProcessingManifest
+from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob, ArtifactProcessingManifest
 
 
 class ArtifactProcessingRepository(Protocol):
@@ -19,3 +19,7 @@ class ArtifactAnalysisJobRepository(Protocol):
     ) -> ArtifactAnalysisJob | None: ...
 
     async def upsert_job(self, job: ArtifactAnalysisJob) -> ArtifactAnalysisJob: ...
+
+    async def list_chunk_results(self, user_id: str, session_id: str, job_id: str) -> list[ArtifactAnalysisChunkResult]: ...
+
+    async def upsert_chunk_result(self, result: ArtifactAnalysisChunkResult) -> ArtifactAnalysisChunkResult: ...

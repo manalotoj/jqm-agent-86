@@ -51,6 +51,7 @@ class FailingBlobStorage:
 class InMemoryAnalysisJobRepository:
     def __init__(self) -> None:
         self.items = {}
+        self.chunk_results = {}
         self.upserted_states = []
 
     async def get_job(self, user_id, session_id, job_id):
@@ -71,6 +72,17 @@ class InMemoryAnalysisJobRepository:
         self.upserted_states.append(job.state)
         self.items[(job.user_id, job.session_id, job.id)] = job
         return job
+
+    async def list_chunk_results(self, user_id, session_id, job_id):
+        return sorted(
+            [result for (owner, session, result_job_id, _), result in self.chunk_results.items()
+             if (owner, session, result_job_id) == (user_id, session_id, job_id)],
+            key=lambda result: result.chunk_index,
+        )
+
+    async def upsert_chunk_result(self, result):
+        self.chunk_results[(result.user_id, result.session_id, result.job_id, result.chunk_index)] = result
+        return result
 
 
 class FailingAnalysisDownloadStorage(InMemoryBlobStorage):
@@ -151,3 +163,40 @@ async def test_analysis_persists_running_then_failed_when_derived_download_fails
     assert repository.upserted_states == ["running", "failed"]
     assert job.expected_rows == 1
     assert job.expected_chunks == 1
+
+
+@pytest.mark.asyncio
+async def test_analysis_retries_only_failed_chunks_and_transitions_partial_to_completed() -> None:
+    derived = InMemoryBlobStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\nAAPL\nNVDA\n"),
+        InMemoryManifestRepository(),
+        derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=2),
+    )
+    manifest = await processing.process_artifact(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+    # Keep the first chunk valid while making the second chunk fail profiling.
+    derived.items[manifest.chunks_blob_name] = BlobDownload(
+        b'{"source_row":1,"values":{"symbol":"MSFT"}}\n'
+        b'{"source_row":2,"values":{"symbol":"AAPL"}}\n'
+        b'{"source_row":3,"values":"invalid"}\n',
+        "application/x-ndjson",
+    )
+    repository = InMemoryAnalysisJobRepository()
+    service = ArtifactAnalysisService(processing, repository, derived)
+
+    partial = await service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+    first_chunk = next(iter(repository.chunk_results.values()))
+    derived.items[manifest.chunks_blob_name] = BlobDownload(
+        b'{"source_row":1,"values":{"symbol":"MSFT"}}\n'
+        b'{"source_row":2,"values":{"symbol":"AAPL"}}\n'
+        b'{"source_row":3,"values":{"symbol":"NVDA"}}\n',
+        "application/x-ndjson",
+    )
+    completed = await service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+
+    assert partial.state == "partial"
+    assert (partial.successful_chunks, partial.failed_chunks) == (1, 1)
+    assert completed.state == "completed"
+    assert (completed.successful_rows, completed.failed_rows) == (3, 0)
+    assert repository.chunk_results[("user-1", "session-1", completed.id, 0)] is first_chunk

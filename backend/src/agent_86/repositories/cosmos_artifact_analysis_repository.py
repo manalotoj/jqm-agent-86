@@ -4,7 +4,7 @@ from typing import Any
 
 from azure.cosmos import ContainerProxy
 
-from agent_86.domain.models.artifact_analysis import ArtifactAnalysisJob, ArtifactProcessingManifest
+from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob, ArtifactProcessingManifest
 
 
 class _CosmosRepository:
@@ -87,11 +87,34 @@ class CosmosArtifactAnalysisJobRepository(_CosmosRepository):
         container = await self._get_container()
         return self._from_document(await container.upsert_item(self._to_document(job)))
 
+    async def list_chunk_results(self, user_id: str, session_id: str, job_id: str) -> list[ArtifactAnalysisChunkResult]:
+        container = await self._get_container()
+        query = "SELECT * FROM c WHERE c.job_id = @job_id AND c.user_id = @user_id"
+        parameters = [{"name": "@job_id", "value": job_id}, {"name": "@user_id", "value": user_id}]
+        results = []
+        async for item in container.query_items(query=query, parameters=parameters, partition_key=session_id):
+            results.append(self._chunk_from_document(item))
+        return sorted(results, key=lambda result: result.chunk_index)
+
+    async def upsert_chunk_result(self, result: ArtifactAnalysisChunkResult) -> ArtifactAnalysisChunkResult:
+        now = datetime.now(UTC)
+        result.created_at = result.created_at or now
+        result.updated_at = now
+        container = await self._get_container()
+        document = {**result.__dict__, "created_at": self._timestamp(result.created_at), "updated_at": self._timestamp(result.updated_at)}
+        return self._chunk_from_document(await container.upsert_item(document))
+
     def _to_document(self, job: ArtifactAnalysisJob) -> dict[str, Any]:
         return {**job.__dict__, "created_at": self._timestamp(job.created_at), "updated_at": self._timestamp(job.updated_at)}
 
     def _from_document(self, document: dict[str, Any]) -> ArtifactAnalysisJob:
         return ArtifactAnalysisJob(
+            **{key: value for key, value in document.items() if key not in {"_rid", "_self", "_etag", "_attachments", "_ts", "created_at", "updated_at"}},
+            created_at=self._parse_datetime(document["created_at"]), updated_at=self._parse_datetime(document["updated_at"]),
+        )
+
+    def _chunk_from_document(self, document: dict[str, Any]) -> ArtifactAnalysisChunkResult:
+        return ArtifactAnalysisChunkResult(
             **{key: value for key, value in document.items() if key not in {"_rid", "_self", "_etag", "_attachments", "_ts", "created_at", "updated_at"}},
             created_at=self._parse_datetime(document["created_at"]), updated_at=self._parse_datetime(document["updated_at"]),
         )

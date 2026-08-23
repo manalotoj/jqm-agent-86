@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime
 
-from agent_86.domain.models.artifact_analysis import ArtifactAnalysisJob
+from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob
 from agent_86.repositories.artifact_analysis_repository import ArtifactAnalysisJobRepository
 from agent_86.services.artifact_processing_service import ArtifactProcessingService
 from agent_86.services.blob_storage_service import BlobStorageService
@@ -52,34 +52,74 @@ class ArtifactAnalysisService:
         # Persist the running state before touching derived data so interrupted
         # executions are observable and retryable.
         job = await self._repository.upsert_job(job)
-        if manifest.state != "ready" or manifest.normalized_blob_name is None:
+        if manifest.state != "ready" or manifest.chunks_blob_name is None:
             job.state = "failed"
             job.error_detail = manifest.error_detail or f"Artifact processing is {manifest.state}"
             return await self._repository.upsert_job(job)
 
         try:
-            download = await self._derived_blob_storage_service.download_blob(manifest.normalized_blob_name)
+            download = await self._derived_blob_storage_service.download_blob(manifest.chunks_blob_name)
             rows = [json.loads(line) for line in download.content.splitlines()]
             self._assert_complete_coverage(rows, manifest.total_rows, manifest.chunk_row_ranges)
-            non_empty_by_column = {
-                header: sum(bool(str(row["values"].get(header, "")).strip()) for row in rows)
-                for header in manifest.headers
-            }
         except Exception as exc:
             job.state = "failed"
             job.error_detail = str(exc)
             job.updated_at = datetime.now(UTC)
             return await self._repository.upsert_job(job)
 
-        job.state = "completed"
-        job.successful_rows = manifest.total_rows
-        job.successful_chunks = manifest.chunk_count
+        existing_chunks = {
+            result.chunk_index: result
+            for result in await self._repository.list_chunk_results(user_id, session_id, job.id)
+            if result.state == "completed"
+        }
+        offset = 0
+        for chunk_index, (start_row, end_row) in enumerate(manifest.chunk_row_ranges):
+            chunk_rows = rows[offset : offset + end_row - start_row + 1]
+            offset += len(chunk_rows)
+            if chunk_index in existing_chunks:
+                continue
+            try:
+                if [row.get("source_row") for row in chunk_rows] != list(range(start_row, end_row + 1)):
+                    raise ValueError("Chunk rows do not match the processing manifest row range")
+                findings = {
+                    "row_count": len(chunk_rows),
+                    "non_empty_values_by_column": {
+                        header: sum(bool(str(row["values"].get(header, "")).strip()) for row in chunk_rows)
+                        for header in manifest.headers
+                    },
+                }
+                result = ArtifactAnalysisChunkResult(
+                    id=f"{job.id}:chunk:{chunk_index}", job_id=job.id, session_id=session_id, user_id=user_id,
+                    artifact_id=artifact_id, chunk_index=chunk_index, start_row=start_row, end_row=end_row,
+                    state="completed", findings=findings,
+                )
+            except Exception as exc:
+                result = ArtifactAnalysisChunkResult(
+                    id=f"{job.id}:chunk:{chunk_index}", job_id=job.id, session_id=session_id, user_id=user_id,
+                    artifact_id=artifact_id, chunk_index=chunk_index, start_row=start_row, end_row=end_row,
+                    state="failed", error_detail=str(exc),
+                )
+            await self._repository.upsert_chunk_result(result)
+
+        chunk_results = await self._repository.list_chunk_results(user_id, session_id, job.id)
+        completed = [result for result in chunk_results if result.state == "completed"]
+        failed = [result for result in chunk_results if result.state == "failed"]
+        job.successful_chunks = len(completed)
+        job.failed_chunks = len(failed)
+        job.successful_rows = sum(result.end_row - result.start_row + 1 for result in completed)
+        job.failed_rows = sum(result.end_row - result.start_row + 1 for result in failed)
+        non_empty_by_column = {
+            header: sum(result.findings["non_empty_values_by_column"].get(header, 0) for result in completed)
+            for header in manifest.headers
+        }
+        job.state = "completed" if len(completed) == manifest.chunk_count else "partial" if completed else "failed"
+        job.error_detail = None if job.state == "completed" else "One or more analysis chunks failed"
         job.findings = {
             "analysis": "deterministic_csv_profile",
             "headers": manifest.headers,
-            "row_count": manifest.total_rows,
+            "row_count": job.successful_rows,
             "non_empty_values_by_column": non_empty_by_column,
-            "covered_row_ranges": manifest.chunk_row_ranges,
+            "covered_row_ranges": [(result.start_row, result.end_row) for result in completed],
         }
         job.updated_at = datetime.now(UTC)
         return await self._repository.upsert_job(job)

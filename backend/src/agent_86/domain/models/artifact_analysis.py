@@ -46,3 +46,20 @@ class ArtifactAnalysisJob:
     error_detail: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass
+class ArtifactAnalysisChunkResult:
+    id: str
+    job_id: str
+    session_id: str
+    user_id: str
+    artifact_id: str
+    chunk_index: int
+    start_row: int
+    end_row: int
+    state: Literal["completed", "failed"]
+    findings: dict[str, Any] = field(default_factory=dict)
+    error_detail: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
