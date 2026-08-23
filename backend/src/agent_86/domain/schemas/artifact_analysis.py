@@ -40,3 +40,4 @@ class ArtifactAnalysisJobResponse(BaseModel):
     error_detail: str | None = None
     created_at: datetime
     updated_at: datetime
+    claim_expires_at: datetime | None = None

@@ -7,6 +7,8 @@ import type { UploadArtifactRequest } from "@/types/artifact";
 import { getActiveAccountOrFirst } from "@/auth/msalConfig";
 
 export const artifactsQueryKey = (sessionId: string | null) => ["artifacts", sessionId] as const;
+export const artifactAnalysisQueryKey = (sessionId: string | null, jobId: string | null) =>
+  ["artifact-analysis", sessionId, jobId] as const;
 
 export function useArtifacts(sessionId: string | null) {
   const { instance, inProgress } = useMsal();
@@ -30,6 +32,35 @@ export function useUploadArtifact(sessionId: string | null) {
       artifactsApi.uploadArtifact(instance, account, sessionId!, request),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: artifactsQueryKey(sessionId) });
+    },
+  });
+}
+
+export function useAnalyzeArtifact(sessionId: string | null) {
+  const { instance } = useMsal();
+  const account = getActiveAccountOrFirst();
+
+  return useMutation({
+    mutationFn: (artifactId: string) => artifactsApi.analyzeArtifact(instance, account, sessionId!, artifactId),
+  });
+}
+
+export function useArtifactAnalysis(
+  sessionId: string | null,
+  artifactId: string,
+  jobId: string | null,
+) {
+  const { instance, inProgress } = useMsal();
+  const account = getActiveAccountOrFirst();
+
+  return useQuery({
+    queryKey: artifactAnalysisQueryKey(sessionId, jobId),
+    queryFn: () => artifactsApi.getArtifactAnalysis(instance, account, sessionId!, artifactId, jobId!),
+    enabled: Boolean(account && sessionId && jobId && inProgress === InteractionStatus.None),
+    retry: false,
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === "requested" || state === "running" ? 2000 : false;
     },
   });
 }

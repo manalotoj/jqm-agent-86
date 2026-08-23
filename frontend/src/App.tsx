@@ -41,6 +41,7 @@ import {
 
 import { streamChat } from "@/api/chat";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
+import { ArtifactAnalysisPanel } from "@/components/ArtifactAnalysisPanel";
 import { SessionSummaryCard } from "@/components/SessionSummaryCard";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -1755,6 +1756,9 @@ function AuthenticatedApp() {
                                 )}
                                 Download
                               </Button>
+                              {selectedSession ? (
+                                <ArtifactAnalysisPanel artifact={artifact} sessionId={selectedSession.id} />
+                              ) : null}
                             </div>
                           );
                         })}

@@ -490,8 +490,10 @@ def test_entire_csv_analysis_is_complete_idempotent_and_retrievable(api_client):
     assert first.json()["successful_rows"] == 2
     assert first.json()["successful_chunks"] == 1
     assert first.json()["findings"]["non_empty_values_by_column"] == {"symbol": 2, "quantity": 1}
+    assert first.json()["claim_expires_at"] is None
     assert second.json()["id"] == first.json()["id"]
     assert status_response.status_code == 200
+    assert status_response.json()["claim_expires_at"] is None
 
 
 def test_artifact_analysis_routes_hide_other_users_jobs_and_artifacts(api_client):

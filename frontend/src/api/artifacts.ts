@@ -2,7 +2,12 @@ import type { AccountInfo, IPublicClientApplication } from "@azure/msal-browser"
 
 import { API_BASE_URL, apiFetch, ApiError } from "@/api/client";
 import { getApiToken } from "@/auth/getApiToken";
-import type { Artifact, DownloadArtifactResult, UploadArtifactRequest } from "@/types/artifact";
+import type {
+  Artifact,
+  ArtifactAnalysisJob,
+  DownloadArtifactResult,
+  UploadArtifactRequest,
+} from "@/types/artifact";
 
 function getDownloadFilename(response: Response, fallbackFilename: string) {
   const contentDisposition = response.headers.get("content-disposition") ?? "";
@@ -83,3 +88,29 @@ export async function downloadArtifact(
     contentType: blob.type || response.headers.get("content-type") || "application/octet-stream",
   };
 }
+
+export const analyzeArtifact = (
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  sessionId: string,
+  artifactId: string,
+) =>
+  apiFetch<ArtifactAnalysisJob>(
+    `/sessions/${sessionId}/artifacts/${artifactId}/analyze`,
+    instance,
+    account,
+    { method: "POST" },
+  );
+
+export const getArtifactAnalysis = (
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  sessionId: string,
+  artifactId: string,
+  jobId: string,
+) =>
+  apiFetch<ArtifactAnalysisJob>(
+    `/sessions/${sessionId}/artifacts/${artifactId}/analysis/${jobId}`,
+    instance,
+    account,
+  );
