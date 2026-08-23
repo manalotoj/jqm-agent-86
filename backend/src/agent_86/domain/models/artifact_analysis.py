@@ -46,6 +46,7 @@ class ArtifactAnalysisJob:
     error_detail: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    claim_expires_at: datetime | None = None
     etag: str | None = None
 
 

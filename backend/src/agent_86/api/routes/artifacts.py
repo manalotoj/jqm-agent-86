@@ -68,6 +68,7 @@ def to_analysis_response(job: ArtifactAnalysisJob) -> ArtifactAnalysisJobRespons
         error_detail=job.error_detail,
         created_at=job.created_at,
         updated_at=job.updated_at,
+        claim_expires_at=job.claim_expires_at,
     )
 
 

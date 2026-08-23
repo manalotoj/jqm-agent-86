@@ -42,7 +42,7 @@ derived/{session_id}/{artifact_id}/{sha256}/analysis/{analysis_id}.json
 
 Processing states are `queued`, `processing`, `ready`, `unsupported`, and `failed`. Analysis states are `requested`, `running`, `completed`, `partial`, and `failed`.
 
-The implementation is idempotent by source content hash. Reprocessing the same artifact version may reuse its derived data. Retries preserve completed chunk records and must not duplicate row coverage.
+The implementation is idempotent by source content hash. Reprocessing the same artifact version may reuse its derived data. Retries preserve completed chunk records and must not duplicate row coverage. A running analysis job carries a finite claim lease. Requests return a job while its lease is valid; after its lease expires, such as when its worker process died, a request conditionally reclaims it using the Cosmos ETag. Only the winner performs recovery work. Terminal jobs clear their lease.
 
 ## Cost and safety controls
 

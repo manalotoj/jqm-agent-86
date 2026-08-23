@@ -1,4 +1,5 @@
 import pytest
+from datetime import UTC, datetime, timedelta
 
 from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob, ArtifactProcessingManifest
 from agent_86.repositories.cosmos_artifact_analysis_repository import CosmosArtifactAnalysisJobRepository, CosmosArtifactProcessingRepository
@@ -93,3 +94,18 @@ async def test_analysis_job_claim_uses_create_then_conditional_replace() -> None
     assert duplicate_claim is None
     assert updated.state == "completed"
     assert updated.etag == "2"
+
+
+@pytest.mark.asyncio
+async def test_analysis_job_claim_persists_and_reads_its_lease_expiry() -> None:
+    repository = CosmosArtifactAnalysisJobRepository(FakeContainer())
+    expiry = datetime.now(UTC) + timedelta(minutes=5)
+
+    claimed = await repository.try_claim_job(ArtifactAnalysisJob(
+        id="job-lease", session_id="session-1", user_id="user-1", artifact_id="artifact-1",
+        source_sha256="a" * 64, analysis_type="csv_profile", state="running", claim_expires_at=expiry,
+    ))
+
+    assert claimed is not None
+    assert claimed.claim_expires_at == expiry
+    assert "claim_expires_at" in (await repository._get_container()).items[0]

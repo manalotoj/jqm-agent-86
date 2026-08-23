@@ -1,8 +1,10 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from agent_86.domain.models.artifact import Artifact
+from agent_86.domain.models.artifact_analysis import ArtifactAnalysisJob
 from agent_86.services.artifact_analysis_service import ArtifactAnalysisService
 from agent_86.services.artifact_processing_service import ArtifactProcessingService
 from agent_86.services.artifact_service import ArtifactWithContent
@@ -292,3 +294,86 @@ async def test_concurrent_analysis_requests_execute_a_job_once() -> None:
     assert first_job.id == second_job.id
     assert first_job.state == "completed"
     assert second_job.state in {"running", "completed"}
+
+
+@pytest.mark.asyncio
+async def test_analysis_returns_a_job_while_its_claim_lease_is_valid() -> None:
+    derived = InMemoryBlobStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\n"), InMemoryManifestRepository(), derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=1),
+    )
+    manifest = await processing.process_artifact(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+    repository = InMemoryAnalysisJobRepository()
+    job = ArtifactAnalysisJob(
+        id=f"artifact-1:{manifest.source_sha256}:csv_profile", session_id="session-1", user_id="user-1",
+        artifact_id="artifact-1", source_sha256=manifest.source_sha256, analysis_type="csv_profile", state="running",
+        claim_expires_at=datetime.now(UTC) + timedelta(minutes=1), etag="1",
+    )
+    repository.items[(job.user_id, job.session_id, job.id)] = job
+
+    returned = await ArtifactAnalysisService(processing, repository, derived).analyze_entire_file(
+        user_id="user-1", session_id="session-1", artifact_id="artifact-1"
+    )
+
+    assert returned is job
+    assert repository.claimed_states == []
+
+
+@pytest.mark.asyncio
+async def test_analysis_reclaims_an_expired_running_job_after_worker_death() -> None:
+    derived = InMemoryBlobStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\n"), InMemoryManifestRepository(), derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=1),
+    )
+    manifest = await processing.process_artifact(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+    repository = InMemoryAnalysisJobRepository()
+    abandoned = ArtifactAnalysisJob(
+        id=f"artifact-1:{manifest.source_sha256}:csv_profile", session_id="session-1", user_id="user-1",
+        artifact_id="artifact-1", source_sha256=manifest.source_sha256, analysis_type="csv_profile", state="running",
+        claim_expires_at=datetime.now(UTC) - timedelta(seconds=1), etag="1",
+    )
+    repository.items[(abandoned.user_id, abandoned.session_id, abandoned.id)] = abandoned
+
+    recovered = await ArtifactAnalysisService(processing, repository, derived).analyze_entire_file(
+        user_id="user-1", session_id="session-1", artifact_id="artifact-1"
+    )
+
+    assert repository.claimed_states == ["running"]
+    assert recovered.state == "completed"
+    assert recovered.claim_expires_at is None
+    assert recovered.etag == "2"
+
+
+@pytest.mark.asyncio
+async def test_analysis_returns_the_winner_when_expired_job_reclaim_conflicts() -> None:
+    class ReclaimConflictRepository(InMemoryAnalysisJobRepository):
+        async def try_claim_job(self, job):
+            winner = ArtifactAnalysisJob(
+                **{**job.__dict__, "claim_expires_at": datetime.now(UTC) + timedelta(minutes=1), "etag": "2"}
+            )
+            self.items[(winner.user_id, winner.session_id, winner.id)] = winner
+            return None
+
+    derived = InMemoryBlobStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\n"), InMemoryManifestRepository(), derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=1),
+    )
+    manifest = await processing.process_artifact(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+    repository = ReclaimConflictRepository()
+    abandoned = ArtifactAnalysisJob(
+        id=f"artifact-1:{manifest.source_sha256}:csv_profile", session_id="session-1", user_id="user-1",
+        artifact_id="artifact-1", source_sha256=manifest.source_sha256, analysis_type="csv_profile", state="running",
+        claim_expires_at=datetime.now(UTC) - timedelta(seconds=1), etag="1",
+    )
+    repository.items[(abandoned.user_id, abandoned.session_id, abandoned.id)] = abandoned
+
+    returned = await ArtifactAnalysisService(processing, repository, derived).analyze_entire_file(
+        user_id="user-1", session_id="session-1", artifact_id="artifact-1"
+    )
+
+    assert returned.state == "running"
+    assert returned.etag == "2"
+    assert returned.claim_expires_at is not None

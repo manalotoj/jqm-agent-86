@@ -134,16 +134,20 @@ class CosmosArtifactAnalysisJobRepository(_CosmosRepository):
         return self._chunk_from_document(await container.upsert_item(document))
 
     def _to_document(self, job: ArtifactAnalysisJob) -> dict[str, Any]:
-        return {
+        document = {
             **{key: value for key, value in job.__dict__.items() if key != "etag"},
             "created_at": self._timestamp(job.created_at),
             "updated_at": self._timestamp(job.updated_at),
         }
+        if job.claim_expires_at is not None:
+            document["claim_expires_at"] = self._timestamp(job.claim_expires_at)
+        return document
 
     def _from_document(self, document: dict[str, Any]) -> ArtifactAnalysisJob:
         return ArtifactAnalysisJob(
-            **{key: value for key, value in document.items() if key not in {"_rid", "_self", "_etag", "_attachments", "_ts", "created_at", "updated_at", "etag"}},
+            **{key: value for key, value in document.items() if key not in {"_rid", "_self", "_etag", "_attachments", "_ts", "created_at", "updated_at", "claim_expires_at", "etag"}},
             created_at=self._parse_datetime(document["created_at"]), updated_at=self._parse_datetime(document["updated_at"]),
+            claim_expires_at=(self._parse_datetime(document["claim_expires_at"]) if document.get("claim_expires_at") else None),
             etag=document.get("_etag"),
         )
 

@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob
 from agent_86.repositories.artifact_analysis_repository import ArtifactAnalysisJobRepository
@@ -19,11 +19,13 @@ class ArtifactAnalysisService:
         repository: ArtifactAnalysisJobRepository,
         derived_blob_storage_service: BlobStorageService,
         findings_inline_max_bytes: int = 64 * 1024,
+        claim_lease_seconds: int = 300,
     ) -> None:
         self._processing_service = processing_service
         self._repository = repository
         self._derived_blob_storage_service = derived_blob_storage_service
         self._findings_inline_max_bytes = findings_inline_max_bytes
+        self._claim_lease = timedelta(seconds=claim_lease_seconds)
 
     async def analyze_entire_file(
         self, *, user_id: str, session_id: str, artifact_id: str
@@ -40,7 +42,15 @@ class ArtifactAnalysisService:
         existing = await self._repository.get_job_by_idempotency_key(
             user_id, session_id, artifact_id, manifest.source_sha256, ANALYSIS_TYPE_CSV_PROFILE
         )
-        if existing is not None and existing.state in {"completed", "running"}:
+        now = datetime.now(UTC)
+        if existing is not None and existing.state == "completed":
+            return existing
+        if (
+            existing is not None
+            and existing.state == "running"
+            and existing.claim_expires_at is not None
+            and existing.claim_expires_at > now
+        ):
             return existing
 
         job = ArtifactAnalysisJob(
@@ -53,8 +63,9 @@ class ArtifactAnalysisService:
             state="running",
             expected_rows=manifest.total_rows,
             expected_chunks=manifest.chunk_count,
-            created_at=existing.created_at if existing is not None else datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_at=existing.created_at if existing is not None else now,
+            updated_at=now,
+            claim_expires_at=now + self._claim_lease,
             etag=existing.etag if existing is not None else None,
         )
         # Persist the running state before touching derived data so interrupted
@@ -70,6 +81,7 @@ class ArtifactAnalysisService:
         if manifest.state != "ready" or manifest.chunks_blob_name is None:
             job.state = "failed"
             job.error_detail = manifest.error_detail or f"Artifact processing is {manifest.state}"
+            job.claim_expires_at = None
             return await self._repository.upsert_job(job)
 
         try:
@@ -149,6 +161,7 @@ class ArtifactAnalysisService:
                 job.state = "failed"
                 job.error_detail = f"Unable to store analysis findings: {exc}"
                 job.updated_at = datetime.now(UTC)
+                job.claim_expires_at = None
                 return await self._repository.upsert_job(job)
             job.findings = {
                 "analysis": findings["analysis"],
@@ -158,6 +171,7 @@ class ArtifactAnalysisService:
         else:
             job.findings = findings
         job.updated_at = datetime.now(UTC)
+        job.claim_expires_at = None
         return await self._repository.upsert_job(job)
 
     async def get_job(self, *, user_id: str, session_id: str, job_id: str) -> ArtifactAnalysisJob | None:

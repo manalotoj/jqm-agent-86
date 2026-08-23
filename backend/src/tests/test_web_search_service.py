@@ -47,9 +47,10 @@ async def test_search_uses_tavily_when_its_key_is_configured(monkeypatch):
         )
 
     transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
 
     def mock_client(*args, **kwargs):
-        return httpx.AsyncClient(transport=transport, *args, **kwargs)
+        return real_async_client(transport=transport, *args, **kwargs)
 
     monkeypatch.setattr("agent_86.services.web_search_service.httpx.AsyncClient", mock_client)
 
@@ -75,9 +76,10 @@ async def test_search_reports_configured_provider_failure_without_exposing_crede
         return httpx.Response(401)
 
     transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
 
     def mock_client(*args, **kwargs):
-        return httpx.AsyncClient(transport=transport, *args, **kwargs)
+        return real_async_client(transport=transport, *args, **kwargs)
 
     monkeypatch.setattr("agent_86.services.web_search_service.httpx.AsyncClient", mock_client)
 
