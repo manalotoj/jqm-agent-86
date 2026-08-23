@@ -253,6 +253,36 @@ jobs:
           curl --connect-timeout 10 --max-time 30 -fsS "https://$api_url/health" || \
             curl --connect-timeout 10 --max-time 30 -fsS "https://$api_url/docs" >/dev/null
 
+      - name: Smoke test browser runtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_url=$(az containerapp show --resource-group "${{ inputs.resource_group }}" --name aca-agent86-api-dev --query properties.configuration.ingress.fqdn --output tsv)
+          runtime_config=$(curl --connect-timeout 10 --max-time 30 --fail --silent --show-error "https://$api_url/runtime-config")
+          RUNTIME_CONFIG="$runtime_config" python3 - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["RUNTIME_CONFIG"])
+          required = {
+              "applicationInsightsConnectionString",
+              "telemetryEnabled",
+              "logLevel",
+          }
+          unexpected_sensitive_keys = {
+              "azureAppConfigurationEndpoint",
+              "appConfigurationConnectionString",
+              "credential",
+              "secret",
+          }
+
+          assert set(payload) == required, f"Unexpected runtime-config keys: {sorted(payload)}"
+          assert isinstance(payload["telemetryEnabled"], bool)
+          assert isinstance(payload["logLevel"], str)
+          assert not (set(payload) & unexpected_sensitive_keys)
+          print("Runtime configuration response is browser-safe and valid.")
+          PY
+
       - name: Smoke test backend CORS preflight
         shell: bash
         run: |
