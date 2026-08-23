@@ -423,6 +423,42 @@ def test_allowed_origin_preflight_returns_cors_headers(api_client):
     assert "content-type" in allowed_headers
 
 
+def test_static_web_app_origin_is_allowed_for_preflight_and_request(api_client):
+    client, _, _, _, _, _ = api_client
+    origin = "https://brave-smoke-0b55bbd1e.7.azurestaticapps.net"
+
+    preflight = client.options(
+        "/sessions",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    request = client.get("/sessions", headers={**auth_header("valid-user-1"), "Origin": origin})
+
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == origin
+    assert request.status_code == 200
+    assert request.headers["access-control-allow-origin"] == origin
+
+
+def test_upload_is_rejected_when_configured_byte_limit_is_exceeded(api_client, monkeypatch: pytest.MonkeyPatch):
+    client, _, _, _, _, _ = api_client
+    session = create_session_for(client, "valid-user-1", title="Upload limit")
+    monkeypatch.setenv("ARTIFACT_UPLOAD_MAX_BYTES", "3")
+    clear_settings_caches()
+
+    response = client.post(
+        f"/sessions/{session['id']}/artifacts/upload",
+        headers=auth_header("valid-user-1"),
+        files={"file": ("large.csv", b"1234", "text/csv")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Artifact exceeds the 3 byte upload limit"
+
+
 def test_session_ownership_is_enforced_for_list_get_update_delete_and_messages(api_client):
     client, session_service, message_service, _, _, _ = api_client
 

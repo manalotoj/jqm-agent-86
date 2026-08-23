@@ -9,7 +9,11 @@ from agent_86.core.errors import ConfigurationError
 class Settings(BaseSettings):
     app_name: str = "agent-86"
     app_env: str = "dev"
-    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_allowed_origins: str = (
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "https://brave-smoke-0b55bbd1e.7.azurestaticapps.net"
+    )
     log_level: str = "INFO"
     log_json: bool = True
     applicationinsights_connection_string: str | None = None
@@ -28,6 +32,10 @@ class Settings(BaseSettings):
 
     azure_blob_connection_string: str = Field(min_length=1)
     azure_blob_container_name: str = Field(min_length=1)
+    azure_blob_derived_container_name: str = "agent86-artifact-derived"
+    artifact_upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
+    artifact_csv_max_rows: int = Field(default=250_000, ge=1)
+    artifact_csv_chunk_rows: int = Field(default=500, ge=1)
 
     foundry_openai_base_url: str
     foundry_openai_api_key: str = Field(min_length=1)

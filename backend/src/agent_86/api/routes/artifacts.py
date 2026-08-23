@@ -7,6 +7,7 @@ from fastapi.responses import Response as FastAPIResponse
 from agent_86.api.dependencies import get_artifact_service, get_message_service, get_session_service
 from agent_86.auth.dependencies import get_authenticated_user
 from agent_86.auth.models import AuthenticatedUser
+from agent_86.core.config import get_settings
 from agent_86.domain.models.artifact import Artifact
 from agent_86.domain.schemas.artifact import ArtifactResponse, CreateGeneratedArtifactRequest
 from agent_86.services.artifact_service import ArtifactNotFoundError, ArtifactService, MessageNotFoundError
@@ -73,6 +74,24 @@ def _decode_generated_content(content_base64: str) -> bytes:
         ) from exc
 
 
+async def _read_upload_with_limit(file: UploadFile, max_bytes: int) -> bytes:
+    """Read a multipart upload in bounded chunks and reject oversize input early."""
+    chunks: list[bytes] = []
+    size_bytes = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        size_bytes += len(chunk)
+        if size_bytes > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"Artifact exceeds the {max_bytes} byte upload limit",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("/upload", response_model=ArtifactResponse, status_code=status.HTTP_201_CREATED)
 async def upload_artifact(
     session_id: str,
@@ -84,7 +103,7 @@ async def upload_artifact(
 ) -> ArtifactResponse:
     await ensure_session_exists(user.user_id, session_id, session_service)
 
-    content = await file.read()
+    content = await _read_upload_with_limit(file, get_settings().artifact_upload_max_bytes)
     artifact = await artifact_service.upload_artifact(
         session_id=session_id,
         user_id=user.user_id,
