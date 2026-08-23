@@ -254,6 +254,15 @@ class InMemoryAnalysisJobRepository:
         self._jobs[(job.user_id, job.session_id, job.id)] = job
         return job
 
+    async def try_claim_job(self, job):
+        key = (job.user_id, job.session_id, job.id)
+        existing = self._jobs.get(key)
+        if existing is not None and job.etag != existing.etag:
+            return None
+        job.etag = str(int(existing.etag or "0") + 1) if existing is not None else "1"
+        self._jobs[key] = job
+        return job
+
     async def list_chunk_results(self, user_id, session_id, job_id):
         return sorted(
             [result for (owner, session, result_job_id, _), result in self._chunk_results.items()

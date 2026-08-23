@@ -1,5 +1,4 @@
 import json
-import asyncio
 from datetime import UTC, datetime
 
 from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob
@@ -25,7 +24,6 @@ class ArtifactAnalysisService:
         self._repository = repository
         self._derived_blob_storage_service = derived_blob_storage_service
         self._findings_inline_max_bytes = findings_inline_max_bytes
-        self._job_locks: dict[str, asyncio.Lock] = {}
 
     async def analyze_entire_file(
         self, *, user_id: str, session_id: str, artifact_id: str
@@ -34,13 +32,11 @@ class ArtifactAnalysisService:
             user_id=user_id, session_id=session_id, artifact_id=artifact_id
         )
         job_id = f"{artifact_id}:{manifest.source_sha256}:{ANALYSIS_TYPE_CSV_PROFILE}"
-        lock = self._job_locks.setdefault(job_id, asyncio.Lock())
-        async with lock:
-            return await self._analyze_with_job_lock(
-                manifest=manifest, job_id=job_id, user_id=user_id, session_id=session_id, artifact_id=artifact_id
-            )
+        return await self._analyze_with_job_claim(
+            manifest=manifest, job_id=job_id, user_id=user_id, session_id=session_id, artifact_id=artifact_id
+        )
 
-    async def _analyze_with_job_lock(self, *, manifest, job_id: str, user_id: str, session_id: str, artifact_id: str) -> ArtifactAnalysisJob:
+    async def _analyze_with_job_claim(self, *, manifest, job_id: str, user_id: str, session_id: str, artifact_id: str) -> ArtifactAnalysisJob:
         existing = await self._repository.get_job_by_idempotency_key(
             user_id, session_id, artifact_id, manifest.source_sha256, ANALYSIS_TYPE_CSV_PROFILE
         )
@@ -59,10 +55,18 @@ class ArtifactAnalysisService:
             expected_chunks=manifest.chunk_count,
             created_at=existing.created_at if existing is not None else datetime.now(UTC),
             updated_at=datetime.now(UTC),
+            etag=existing.etag if existing is not None else None,
         )
         # Persist the running state before touching derived data so interrupted
         # executions are observable and retryable.
-        job = await self._repository.upsert_job(job)
+        job = await self._repository.try_claim_job(job)
+        if job is None:
+            claimed_by_other = await self._repository.get_job_by_idempotency_key(
+                user_id, session_id, artifact_id, manifest.source_sha256, ANALYSIS_TYPE_CSV_PROFILE
+            )
+            if claimed_by_other is None:
+                raise RuntimeError("Analysis job claim conflicted but no durable job was found")
+            return claimed_by_other
         if manifest.state != "ready" or manifest.chunks_blob_name is None:
             job.state = "failed"
             job.error_detail = manifest.error_detail or f"Artifact processing is {manifest.state}"

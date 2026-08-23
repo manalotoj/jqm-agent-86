@@ -55,6 +55,7 @@ class InMemoryAnalysisJobRepository:
         self.items = {}
         self.chunk_results = {}
         self.upserted_states = []
+        self.claimed_states = []
 
     async def get_job(self, user_id, session_id, job_id):
         return self.items.get((user_id, session_id, job_id))
@@ -73,6 +74,16 @@ class InMemoryAnalysisJobRepository:
     async def upsert_job(self, job):
         self.upserted_states.append(job.state)
         self.items[(job.user_id, job.session_id, job.id)] = job
+        return job
+
+    async def try_claim_job(self, job):
+        key = (job.user_id, job.session_id, job.id)
+        existing = self.items.get(key)
+        if existing is not None and job.etag != existing.etag:
+            return None
+        job.etag = str(int(existing.etag or "0") + 1) if existing is not None else "1"
+        self.claimed_states.append(job.state)
+        self.items[key] = job
         return job
 
     async def list_chunk_results(self, user_id, session_id, job_id):
@@ -183,7 +194,8 @@ async def test_analysis_persists_running_then_failed_when_derived_download_fails
 
     assert job.state == "failed"
     assert job.error_detail == "derived analysis data unavailable"
-    assert repository.upserted_states == ["running", "failed"]
+    assert repository.claimed_states == ["running"]
+    assert repository.upserted_states == ["failed"]
     assert job.expected_rows == 1
     assert job.expected_chunks == 1
 
@@ -271,10 +283,12 @@ async def test_concurrent_analysis_requests_execute_a_job_once() -> None:
     first = asyncio.create_task(service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1"))
     await derived.download_started.wait()
     second = asyncio.create_task(service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1"))
+    await asyncio.sleep(0)
     derived.release_download.set()
     first_job, second_job = await asyncio.gather(first, second)
 
     assert manifest.chunks_blob_name is not None
     assert derived.download_count == 1
     assert first_job.id == second_job.id
-    assert first_job.state == second_job.state == "completed"
+    assert first_job.state == "completed"
+    assert second_job.state in {"running", "completed"}

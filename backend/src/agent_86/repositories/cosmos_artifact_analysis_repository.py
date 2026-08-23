@@ -3,6 +3,8 @@ from inspect import isawaitable
 from typing import Any
 
 from azure.cosmos import ContainerProxy
+from azure.cosmos.exceptions import CosmosHttpResponseError, CosmosResourceExistsError
+from azure.core import MatchConditions
 
 from agent_86.domain.models.artifact_analysis import ArtifactAnalysisChunkResult, ArtifactAnalysisJob, ArtifactProcessingManifest
 
@@ -85,7 +87,34 @@ class CosmosArtifactAnalysisJobRepository(_CosmosRepository):
         job.created_at = job.created_at or now
         job.updated_at = now
         container = await self._get_container()
-        return self._from_document(await container.upsert_item(self._to_document(job)))
+        document = self._to_document(job)
+        if job.etag is None:
+            stored = await container.upsert_item(document)
+        else:
+            stored = await container.replace_item(
+                item=job.id, body=document, etag=job.etag, match_condition=MatchConditions.IfNotModified
+            )
+        return self._from_document(stored)
+
+    async def try_claim_job(self, job: ArtifactAnalysisJob) -> ArtifactAnalysisJob | None:
+        """Atomically create a job or conditionally transition a retryable job to running."""
+        now = datetime.now(UTC)
+        job.created_at = job.created_at or now
+        job.updated_at = now
+        container = await self._get_container()
+        try:
+            if job.etag is None:
+                stored = await container.create_item(self._to_document(job))
+            else:
+                stored = await container.replace_item(
+                    item=job.id,
+                    body=self._to_document(job),
+                    etag=job.etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+        except (CosmosResourceExistsError, CosmosHttpResponseError):
+            return None
+        return self._from_document(stored)
 
     async def list_chunk_results(self, user_id: str, session_id: str, job_id: str) -> list[ArtifactAnalysisChunkResult]:
         container = await self._get_container()
@@ -105,12 +134,17 @@ class CosmosArtifactAnalysisJobRepository(_CosmosRepository):
         return self._chunk_from_document(await container.upsert_item(document))
 
     def _to_document(self, job: ArtifactAnalysisJob) -> dict[str, Any]:
-        return {**job.__dict__, "created_at": self._timestamp(job.created_at), "updated_at": self._timestamp(job.updated_at)}
+        return {
+            **{key: value for key, value in job.__dict__.items() if key != "etag"},
+            "created_at": self._timestamp(job.created_at),
+            "updated_at": self._timestamp(job.updated_at),
+        }
 
     def _from_document(self, document: dict[str, Any]) -> ArtifactAnalysisJob:
         return ArtifactAnalysisJob(
-            **{key: value for key, value in document.items() if key not in {"_rid", "_self", "_etag", "_attachments", "_ts", "created_at", "updated_at"}},
+            **{key: value for key, value in document.items() if key not in {"_rid", "_self", "_etag", "_attachments", "_ts", "created_at", "updated_at", "etag"}},
             created_at=self._parse_datetime(document["created_at"]), updated_at=self._parse_datetime(document["updated_at"]),
+            etag=document.get("_etag"),
         )
 
     def _chunk_from_document(self, document: dict[str, Any]) -> ArtifactAnalysisChunkResult:
