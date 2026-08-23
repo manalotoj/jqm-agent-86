@@ -6,6 +6,7 @@ RESOURCE_GROUP=""
 LOCATION=""
 CONTAINER_NAME="agent86-artifacts"
 DERIVED_CONTAINER_NAME="agent86-artifact-derived"
+DERIVED_RETENTION_DAYS=30
 NAME_PREFIX="agent86"
 SKU="Standard_LRS"
 ENVIRONMENTS_CSV="dev,e2e"
@@ -24,6 +25,9 @@ Required:
 Optional:
   --location <azure-region> Storage account location. Defaults to the resource group location.
   --container-name <name>   Blob container name (default: $CONTAINER_NAME)
+  --derived-retention-days <days>
+                            Delete derived artifact blobs after this many days
+                            (default: $DERIVED_RETENTION_DAYS)
   --name-prefix <prefix>    Prefix for generated storage account names (default: $NAME_PREFIX)
   --sku <sku>               Storage account SKU (default: $SKU)
   --environments <csv>      Comma-separated environment list (default: $ENVIRONMENTS_CSV)
@@ -66,6 +70,11 @@ while [[ $# -gt 0 ]]; do
       CONTAINER_NAME="$2"
       shift 2
       ;;
+    --derived-retention-days)
+      [[ $# -ge 2 ]] || fail "Missing value for --derived-retention-days"
+      DERIVED_RETENTION_DAYS="$2"
+      shift 2
+      ;;
     --name-prefix)
       [[ $# -ge 2 ]] || fail "Missing value for --name-prefix"
       NAME_PREFIX="$2"
@@ -92,6 +101,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$RESOURCE_GROUP" ]] || fail "--resource-group is required"
+[[ "$DERIVED_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] || fail "--derived-retention-days must be a positive integer"
 
 az account show >/dev/null 2>&1 || fail "Azure CLI is not logged in. Run 'az login' first."
 
@@ -208,6 +218,10 @@ for environment in "${ENVIRONMENTS[@]}"; do
 
   create_container_if_missing "$account_name" "$account_key" "$CONTAINER_NAME"
   create_container_if_missing "$account_name" "$account_key" "$DERIVED_CONTAINER_NAME"
+  bash "$(dirname "$0")/ensure_derived_artifact_lifecycle_policy.sh" \
+    --resource-group "$RESOURCE_GROUP" \
+    --account-name "$account_name" \
+    --retention-days "$DERIVED_RETENTION_DAYS"
 
   echo "[$environment] Ready."
   echo "  Resource Group             : $RESOURCE_GROUP"
@@ -215,6 +229,7 @@ for environment in "${ENVIRONMENTS[@]}"; do
   echo "  Storage Account            : $account_name"
   echo "  Blob Container             : $CONTAINER_NAME"
   echo "  Derived Blob Container     : $DERIVED_CONTAINER_NAME"
+  echo "  Derived Blob Retention     : $DERIVED_RETENTION_DAYS days"
   echo ""
 
   RESULTING_RESOURCES+=("$environment|$account_name|$CONTAINER_NAME")
