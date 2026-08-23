@@ -175,7 +175,8 @@ def _artifact_processing_service_instance() -> ArtifactProcessingService:
 @lru_cache(maxsize=1)
 def _artifact_analysis_service_instance() -> ArtifactAnalysisService:
     return ArtifactAnalysisService(
-        _artifact_processing_service_instance(), _artifact_analysis_job_repository(), _derived_blob_storage_service()
+        _artifact_processing_service_instance(), _artifact_analysis_job_repository(), _derived_blob_storage_service(),
+        findings_inline_max_bytes=_settings().artifact_analysis_findings_inline_max_bytes,
     )
 
 

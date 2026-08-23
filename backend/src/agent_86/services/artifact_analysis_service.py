@@ -18,10 +18,12 @@ class ArtifactAnalysisService:
         processing_service: ArtifactProcessingService,
         repository: ArtifactAnalysisJobRepository,
         derived_blob_storage_service: BlobStorageService,
+        findings_inline_max_bytes: int = 64 * 1024,
     ) -> None:
         self._processing_service = processing_service
         self._repository = repository
         self._derived_blob_storage_service = derived_blob_storage_service
+        self._findings_inline_max_bytes = findings_inline_max_bytes
 
     async def analyze_entire_file(
         self, *, user_id: str, session_id: str, artifact_id: str
@@ -114,13 +116,34 @@ class ArtifactAnalysisService:
         }
         job.state = "completed" if len(completed) == manifest.chunk_count else "partial" if completed else "failed"
         job.error_detail = None if job.state == "completed" else "One or more analysis chunks failed"
-        job.findings = {
+        findings = {
             "analysis": "deterministic_csv_profile",
             "headers": manifest.headers,
             "row_count": job.successful_rows,
             "non_empty_values_by_column": non_empty_by_column,
             "covered_row_ranges": [(result.start_row, result.end_row) for result in completed],
         }
+        findings_content = json.dumps(findings, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        if len(findings_content) > self._findings_inline_max_bytes:
+            job.findings_blob_name = (
+                f"derived/{session_id}/{artifact_id}/{manifest.source_sha256}/analysis/{job.id}.json"
+            )
+            try:
+                await self._derived_blob_storage_service.upload_blob(
+                    job.findings_blob_name, findings_content, "application/json"
+                )
+            except Exception as exc:
+                job.state = "failed"
+                job.error_detail = f"Unable to store analysis findings: {exc}"
+                job.updated_at = datetime.now(UTC)
+                return await self._repository.upsert_job(job)
+            job.findings = {
+                "analysis": findings["analysis"],
+                "row_count": findings["row_count"],
+                "findings_stored_in_blob": True,
+            }
+        else:
+            job.findings = findings
         job.updated_at = datetime.now(UTC)
         return await self._repository.upsert_job(job)
 

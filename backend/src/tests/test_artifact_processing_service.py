@@ -90,6 +90,13 @@ class FailingAnalysisDownloadStorage(InMemoryBlobStorage):
         raise RuntimeError("derived analysis data unavailable")
 
 
+class FailingAnalysisFindingsStorage(InMemoryBlobStorage):
+    async def upload_blob(self, blob_name, content, content_type):
+        if "/analysis/" in blob_name:
+            raise RuntimeError("analysis findings storage unavailable")
+        await super().upload_blob(blob_name, content, content_type)
+
+
 @pytest.mark.asyncio
 async def test_process_csv_writes_derived_blobs_with_complete_row_ranges() -> None:
     repository = InMemoryManifestRepository()
@@ -200,3 +207,35 @@ async def test_analysis_retries_only_failed_chunks_and_transitions_partial_to_co
     assert completed.state == "completed"
     assert (completed.successful_rows, completed.failed_rows) == (3, 0)
     assert repository.chunk_results[("user-1", "session-1", completed.id, 0)] is first_chunk
+
+
+@pytest.mark.asyncio
+async def test_analysis_stores_oversized_findings_in_derived_blob() -> None:
+    derived = InMemoryBlobStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\n"), InMemoryManifestRepository(), derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=1),
+    )
+    service = ArtifactAnalysisService(processing, InMemoryAnalysisJobRepository(), derived, findings_inline_max_bytes=1)
+
+    job = await service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+
+    assert job.state == "completed"
+    assert job.findings == {"analysis": "deterministic_csv_profile", "row_count": 1, "findings_stored_in_blob": True}
+    assert job.findings_blob_name in derived.items
+    assert b'"covered_row_ranges"' in derived.items[job.findings_blob_name].content
+
+
+@pytest.mark.asyncio
+async def test_analysis_records_failed_when_oversized_findings_cannot_be_stored() -> None:
+    derived = FailingAnalysisFindingsStorage()
+    processing = ArtifactProcessingService(
+        StubArtifactService("portfolio.csv", "text/csv", b"symbol\nMSFT\n"), InMemoryManifestRepository(), derived,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=1),
+    )
+    service = ArtifactAnalysisService(processing, InMemoryAnalysisJobRepository(), derived, findings_inline_max_bytes=1)
+
+    job = await service.analyze_entire_file(user_id="user-1", session_id="session-1", artifact_id="artifact-1")
+
+    assert job.state == "failed"
+    assert job.error_detail == "Unable to store analysis findings: analysis findings storage unavailable"
