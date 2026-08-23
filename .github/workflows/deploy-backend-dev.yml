@@ -34,6 +34,17 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Keep this deployment independently runnable; do not require Infra Dev to have run first.
+      - name: Ensure Azure App Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          resource_group="${{ inputs.resource_group }}"
+          location=$(az group show --name "$resource_group" --query location --output tsv)
+          bash "${{ github.workspace }}/common/scripts/azure_app_configuration/ensure_agent86_app_configuration.sh" \
+            --resource-group "$resource_group" \
+            --location "$location"
+
       - name: Resolve image tag
         id: image
         shell: bash
