@@ -106,6 +106,8 @@ jobs:
           cosmos_key=$(az keyvault secret show --vault-name "$kv_name" --name cosmos-key --query value --output tsv)
           blob_connection_string=$(az keyvault secret show --vault-name "$kv_name" --name azure-blob-connection-string --query value --output tsv)
           foundry_api_key=$(az keyvault secret show --vault-name "$kv_name" --name foundry-openai-api-key --query value --output tsv)
+          tavily_api_key=$(az keyvault secret show --vault-name "$kv_name" --name tavily-api-key --query value --output tsv 2>/dev/null || true)
+          brave_search_api_key=$(az keyvault secret show --vault-name "$kv_name" --name brave-search-api-key --query value --output tsv 2>/dev/null || true)
           appinsights_connection_string=$(az keyvault secret show --vault-name "$kv_name" --name applicationinsights-connection-string --query value --output tsv 2>/dev/null || true)
           cosmos_endpoint=$(az cosmosdb show --resource-group "$rg" --name "$cosmos_account" --query documentEndpoint --output tsv)
           echo "storage_account=$storage_account" >> "$GITHUB_OUTPUT"
@@ -115,6 +117,8 @@ jobs:
           echo "cosmos_key=$cosmos_key" >> "$GITHUB_OUTPUT"
           echo "blob_connection_string=$blob_connection_string" >> "$GITHUB_OUTPUT"
           echo "foundry_api_key=$foundry_api_key" >> "$GITHUB_OUTPUT"
+          echo "tavily_api_key=$tavily_api_key" >> "$GITHUB_OUTPUT"
+          echo "brave_search_api_key=$brave_search_api_key" >> "$GITHUB_OUTPUT"
           echo "appinsights_connection_string=$appinsights_connection_string" >> "$GITHUB_OUTPUT"
 
       - name: Deploy backend services
@@ -181,6 +185,12 @@ jobs:
           )
           if [[ -n "${{ steps.resolve.outputs.appinsights_connection_string }}" ]]; then
             cmd+=(--api-secret "APPLICATIONINSIGHTS_CONNECTION_STRING=${{ steps.resolve.outputs.appinsights_connection_string }}")
+          fi
+          if [[ -n "${{ steps.resolve.outputs.tavily_api_key }}" ]]; then
+            cmd+=(--api-secret "TAVILY_API_KEY=${{ steps.resolve.outputs.tavily_api_key }}")
+          fi
+          if [[ -n "${{ steps.resolve.outputs.brave_search_api_key }}" ]]; then
+            cmd+=(--api-secret "BRAVE_SEARCH_API_KEY=${{ steps.resolve.outputs.brave_search_api_key }}")
           fi
           if [[ "${{ inputs.deploy_mcp }}" == "true" ]]; then
             cmd+=(--deploy-mcp)

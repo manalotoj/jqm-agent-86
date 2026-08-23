@@ -1,6 +1,11 @@
+import logging
+
 import httpx
 
 from agent_86.core.config import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class WebSearchService:
@@ -10,6 +15,17 @@ class WebSearchService:
         self._max_results = settings.web_search_max_results
 
     async def search(self, query: str) -> tuple[str, dict]:
+        configured_providers = self._configured_providers()
+        if not configured_providers:
+            return (
+                "No web search provider is configured for this request.",
+                {
+                    "provider": "none",
+                    "query": query,
+                    "status": "not_configured",
+                },
+            )
+
         tavily_result = await self._search_tavily(query)
         if tavily_result is not None:
             return tavily_result
@@ -19,13 +35,21 @@ class WebSearchService:
             return brave_result
 
         return (
-            "No web search provider is currently available for this request.",
+            "Configured web search provider(s) are currently unavailable. Please try again later.",
             {
-                "provider": "none",
+                "provider": ",".join(configured_providers),
                 "query": query,
-                "status": "unavailable",
+                "status": "provider_unavailable",
             },
         )
+
+    def _configured_providers(self) -> list[str]:
+        providers: list[str] = []
+        if self._settings.tavily_api_key:
+            providers.append("tavily")
+        if self._settings.brave_search_api_key:
+            providers.append("brave")
+        return providers
 
     async def _search_tavily(self, query: str) -> tuple[str, dict] | None:
         if not self._settings.tavily_api_key:
@@ -41,13 +65,22 @@ class WebSearchService:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(url, json=payload)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.warning("Tavily web search request failed: %s", type(exc).__name__)
             return None
 
         if response.status_code in {401, 402, 429}:
+            logger.warning(
+                "Tavily web search request was rejected with HTTP %s.",
+                response.status_code,
+            )
             return None
 
         if response.is_error:
+            logger.warning(
+                "Tavily web search request failed with HTTP %s.",
+                response.status_code,
+            )
             return None
 
         data = response.json()
@@ -93,13 +126,22 @@ class WebSearchService:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(url, headers=headers, params=params)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.warning("Brave web search request failed: %s", type(exc).__name__)
             return None
 
         if response.status_code in {401, 402, 429}:
+            logger.warning(
+                "Brave web search request was rejected with HTTP %s.",
+                response.status_code,
+            )
             return None
 
         if response.is_error:
+            logger.warning(
+                "Brave web search request failed with HTTP %s.",
+                response.status_code,
+            )
             return None
 
         data = response.json()
