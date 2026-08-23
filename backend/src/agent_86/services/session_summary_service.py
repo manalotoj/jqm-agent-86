@@ -18,6 +18,8 @@ Use only the supplied session context.
 Do not call tools, do not invent external facts, and do not mention missing context unless needed in open_questions.
 Generate a concise title based on the session context instead of copying the stored session title.
 artifact refs may include persisted artifacts and meaningful generated outputs or references present in the message history.
+Each artifacts_generated entry must be an object with name, artifact_type, and location; never return a bare string or artifact ID.
+For persisted artifacts, use the supplied filename as name and its id as location. artifact_type must be docx, pptx, xlsx, diagram, code, or other.
 Keep lists concise and useful for later retrieval.
 If artifact metadata indicates unsupported or partially visible attachments, reflect that accurately instead of implying full inspection.
 """

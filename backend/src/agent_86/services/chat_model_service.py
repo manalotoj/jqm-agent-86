@@ -559,4 +559,61 @@ class ChatModelService:
         normalized.setdefault("tools_used", [])
         normalized.setdefault("tags", [])
 
+        normalized["artifacts_generated"] = self._normalize_artifact_refs(
+            normalized["artifacts_generated"],
+            context_payload.get("persisted_artifacts", []),
+        )
+
         return normalized
+
+    def _normalize_artifact_refs(self, value: Any, persisted_artifacts: Any) -> list[Any]:
+        if not isinstance(value, list):
+            return []
+
+        artifacts_by_id = {
+            artifact_id: artifact
+            for artifact in persisted_artifacts
+            if isinstance(artifact, dict)
+            and isinstance((artifact_id := artifact.get("id")), str)
+            and artifact_id
+        } if isinstance(persisted_artifacts, list) else {}
+
+        normalized: list[Any] = []
+        for artifact_ref in value:
+            if not isinstance(artifact_ref, str):
+                normalized.append(artifact_ref)
+                continue
+
+            artifact = artifacts_by_id.get(artifact_ref)
+            if artifact is None:
+                continue
+
+            filename = artifact.get("filename")
+            content_type = artifact.get("content_type")
+            if not isinstance(filename, str) or not filename:
+                continue
+
+            normalized.append(
+                {
+                    "name": filename,
+                    "artifact_type": self._infer_artifact_type(filename, content_type),
+                    "location": artifact_ref,
+                }
+            )
+
+        return normalized
+
+    def _infer_artifact_type(self, filename: str, content_type: Any) -> str:
+        lower_name = filename.lower()
+        lower_content_type = content_type.lower() if isinstance(content_type, str) else ""
+        if lower_name.endswith(".docx") or "officedocument.wordprocessingml" in lower_content_type:
+            return "docx"
+        if lower_name.endswith(".pptx") or "presentationml" in lower_content_type:
+            return "pptx"
+        if lower_name.endswith(".xlsx") or "spreadsheetml" in lower_content_type:
+            return "xlsx"
+        if any(extension in lower_name for extension in (".drawio", ".vsdx", ".mmd", ".svg")):
+            return "diagram"
+        if any(extension in lower_name for extension in (".py", ".ts", ".tsx", ".js", ".json", ".yaml", ".yml", ".md")):
+            return "code"
+        return "other"
