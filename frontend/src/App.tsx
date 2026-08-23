@@ -18,6 +18,8 @@ import {
   Bot,
   CheckCircle2,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   PanelLeft,
   PanelRight,
@@ -100,9 +102,13 @@ const PREMIUM_CHAT_MODEL = "gpt-5.4";
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_ARTIFACTS: Artifact[] = [];
 const EMPTY_SESSIONS: Session[] = [];
+const LARGE_MESSAGE_CHARACTER_THRESHOLD = 2_000;
+const LARGE_MESSAGE_PREVIEW_CHARACTER_COUNT = 500;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 120;
 
 type NoticeTone = "success" | "error" | "info";
 type MainContentView = "chat" | "summary";
+type LongMessageDisplayMode = "default" | "expanded" | "collapsed";
 
 type AppNotice = {
   id: string;
@@ -178,6 +184,16 @@ function getInitials(name?: string | null) {
 function getAssistantModel(message: Message | null) {
   const model = message?.metadata?.model;
   return typeof model === "string" ? model : null;
+}
+
+function getMessagePreview(content: string) {
+  const normalized = content.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= LARGE_MESSAGE_PREVIEW_CHARACTER_COUNT) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, LARGE_MESSAGE_PREVIEW_CHARACTER_COUNT).trimEnd()}…`;
 }
 
 function getAssistantTools(message: Message | null) {
@@ -395,20 +411,39 @@ function MessageBubble({
   attachedArtifacts,
   onDownloadArtifact,
   downloadingArtifactId,
+  longMessageDisplayMode,
+  isStreaming,
 }: {
   message: Message;
   attachedArtifacts: Artifact[];
   onDownloadArtifact: (artifact: Artifact) => void;
   downloadingArtifactId: string | null;
+  longMessageDisplayMode: LongMessageDisplayMode;
+  isStreaming: boolean;
 }) {
   const isUser = message.role === "user";
+  const isLargeAssistantMessage =
+    !isUser && message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD;
   const [isCopied, setIsCopied] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(() => !isLargeAssistantMessage || isStreaming);
+  const shouldRenderMessageDetails = !isLargeAssistantMessage || isExpanded;
   const model = getAssistantModel(message);
   const tools = getAssistantTools(message);
   const artifactIds = getMessageArtifactIds(message);
   const resolvedArtifacts = artifactIds
     .map((artifactId) => attachedArtifacts.find((artifact) => artifact.id === artifactId) ?? null)
     .filter((artifact): artifact is Artifact => artifact !== null);
+
+  useEffect(() => {
+    if (!isLargeAssistantMessage || isStreaming || longMessageDisplayMode === "expanded") {
+      setIsExpanded(true);
+      return;
+    }
+
+    if (longMessageDisplayMode === "collapsed") {
+      setIsExpanded(false);
+    }
+  }, [isLargeAssistantMessage, isStreaming, longMessageDisplayMode, message.id]);
 
   const handleCopy = async () => {
     try {
@@ -496,8 +531,44 @@ function MessageBubble({
             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-primary-foreground">
               {message.content || "…"}
             </p>
+          ) : isLargeAssistantMessage && !isExpanded ? (
+            <div className="mt-2">
+              <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+                {getMessagePreview(message.content)}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <span className="text-xs text-muted-foreground">
+                  {message.content.length.toLocaleString()} characters
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  aria-expanded={false}
+                  onClick={() => setIsExpanded(true)}
+                >
+                  <ChevronDown className="size-3" />
+                  Expand message
+                </Button>
+              </div>
+            </div>
           ) : message.content ? (
-            <MarkdownMessage content={message.content} />
+            <>
+              <MarkdownMessage content={message.content} />
+              {isLargeAssistantMessage ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="mt-2"
+                  aria-expanded={true}
+                  onClick={() => setIsExpanded(false)}
+                >
+                  <ChevronUp className="size-3" />
+                  Collapse message
+                </Button>
+              ) : null}
+            </>
           ) : (
             <p className="mt-2 text-sm leading-6">…</p>
           )}
@@ -533,7 +604,7 @@ function MessageBubble({
               })}
             </div>
           ) : null}
-          {!isUser && tools.length > 0 ? (
+          {shouldRenderMessageDetails && !isUser && tools.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {tools.map((tool) => (
                 <span
@@ -588,8 +659,11 @@ function AuthenticatedApp() {
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
   const [isStreamingActive, setIsStreamingActive] = useState(false);
   const [lastStreamModel, setLastStreamModel] = useState<string | null>(null);
+  const [longMessageDisplayMode, setLongMessageDisplayMode] =
+    useState<LongMessageDisplayMode>("default");
 
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const selectedSession = useMemo(() => {
     if (!sessions.length) {
@@ -631,6 +705,8 @@ function AuthenticatedApp() {
     setStreamingStatus(null);
     setIsStreamingActive(false);
     setLastStreamModel(null);
+    setLongMessageDisplayMode("default");
+    shouldAutoScrollRef.current = true;
   }, [selectedSession?.id]);
 
   useEffect(() => {
@@ -716,12 +792,28 @@ function AuthenticatedApp() {
   useEffect(() => {
     const viewport = scrollViewportRef.current;
 
-    if (!viewport) {
+    if (!viewport || !shouldAutoScrollRef.current) {
       return;
     }
 
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
   }, [messages, streamingStatus]);
+
+  const handleConversationScroll = () => {
+    const viewport = scrollViewportRef.current;
+
+    if (!viewport) {
+      return;
+    }
+
+    shouldAutoScrollRef.current =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+  };
+
+  const hasLargeAssistantMessages = messages.some(
+    (message) =>
+      message.role === "assistant" && message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD,
+  );
 
   const handleLoginOut = () => {
     queryClient.clear();
@@ -931,6 +1023,8 @@ function AuthenticatedApp() {
     if (!content) {
       return;
     }
+
+    shouldAutoScrollRef.current = true;
 
     const requestSessionId = selectedSession.id;
     const requestMetadata = {
@@ -1345,6 +1439,27 @@ function AuthenticatedApp() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {mainContentView === "chat" && hasLargeAssistantMessages ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setLongMessageDisplayMode((current) =>
+                        current === "collapsed" ? "expanded" : "collapsed",
+                      )
+                    }
+                  >
+                    {longMessageDisplayMode === "collapsed" ? (
+                      <ChevronDown className="size-4" />
+                    ) : (
+                      <ChevronUp className="size-4" />
+                    )}
+                    {longMessageDisplayMode === "collapsed"
+                      ? "Expand all long messages"
+                      : "Collapse long messages"}
+                  </Button>
+                ) : null}
                 <div className="inline-flex rounded-full border bg-muted/40 p-1">
                   <Button
                     type="button"
@@ -1398,6 +1513,7 @@ function AuthenticatedApp() {
 
             <div
               ref={mainContentView === "chat" ? scrollViewportRef : undefined}
+              onScroll={mainContentView === "chat" ? handleConversationScroll : undefined}
               className="min-h-0 flex-1 overflow-y-auto px-6 py-6"
             >
               {mainContentView === "chat" ? (
@@ -1424,6 +1540,10 @@ function AuthenticatedApp() {
                           void handleDownloadArtifact(artifact);
                         }}
                         downloadingArtifactId={downloadingArtifactId}
+                        longMessageDisplayMode={longMessageDisplayMode}
+                        isStreaming={
+                          isStreamingActive && message.id === lastAssistantMessage?.id
+                        }
                       />
                     ))}
                   </div>
