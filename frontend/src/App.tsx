@@ -509,23 +509,42 @@ function MessageBubble({
                 {model}
               </span>
             ) : null}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className={cn("ml-auto", isUser && "text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground")}
-                  aria-label={`Copy ${isUser ? "user" : "assistant"} message`}
-                  onClick={() => {
-                    void handleCopy();
-                  }}
-                >
-                  {isCopied ? <Check className="size-3" /> : <Copy className="size-3" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{isCopied ? "Copied" : "Copy message"}</TooltipContent>
-            </Tooltip>
+            <div className="ml-auto flex items-center gap-1">
+              {isLargeAssistantMessage && !isStreaming ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Expand/collapse message"
+                      aria-expanded={isExpanded}
+                      onClick={() => setIsExpanded((current) => !current)}
+                    >
+                      {isExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>expand/collapse</TooltipContent>
+                </Tooltip>
+              ) : null}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className={cn(isUser && "text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground")}
+                    aria-label={`Copy ${isUser ? "user" : "assistant"} message`}
+                    onClick={() => {
+                      void handleCopy();
+                    }}
+                  >
+                    {isCopied ? <Check className="size-3" /> : <Copy className="size-3" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isCopied ? "Copied" : "Copy message"}</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
           {isUser ? (
             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-primary-foreground">
@@ -540,35 +559,10 @@ function MessageBubble({
                 <span className="text-xs text-muted-foreground">
                   {message.content.length.toLocaleString()} characters
                 </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  aria-expanded={false}
-                  onClick={() => setIsExpanded(true)}
-                >
-                  <ChevronDown className="size-3" />
-                  Expand message
-                </Button>
               </div>
             </div>
           ) : message.content ? (
-            <>
-              <MarkdownMessage content={message.content} />
-              {isLargeAssistantMessage ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="mt-2"
-                  aria-expanded={true}
-                  onClick={() => setIsExpanded(false)}
-                >
-                  <ChevronUp className="size-3" />
-                  Collapse message
-                </Button>
-              ) : null}
-            </>
+            <MarkdownMessage content={message.content} />
           ) : (
             <p className="mt-2 text-sm leading-6">…</p>
           )}
