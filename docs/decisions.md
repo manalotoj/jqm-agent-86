@@ -75,6 +75,11 @@ Cosmos-backed persistence
 Azure OpenAI-compatible model client
 heuristic model routing
 local development identity mode
+Large artifact analysis
+Use application-managed Azure Blob Storage and Cosmos DB for explicit, whole-file CSV analysis.
+Keep original files in the existing artifact container; keep normalized content, chunks, and large analysis outputs in a separate private derived-artifact container; keep compact manifests, state, coverage, and result references in Cosmos DB.
+Do not introduce Azure AI Search or vector infrastructure for this capability.
+Reason: this is additive, cost-aware, preserves the existing artifact and chat paths, and makes CSV coverage auditable without premature retrieval infrastructure.
 How to use this file
 
 update this file when a decision is made that affects implementation

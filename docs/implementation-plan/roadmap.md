@@ -222,6 +222,25 @@ Out of scope
 advanced document indexing
 semantic retrieval over large corpora
 collaborative editing workflows
+Phase 3A: large CSV artifact analysis
+Objective
+Add an explicit, auditable whole-file CSV analysis workflow while preserving bounded normal-chat attachment behavior.
+
+Expected deliverables
+
+private derived-artifact Blob container with retention policy
+Cosmos processing-manifest and analysis-job containers
+bounded upload handling and configurable CSV limits
+CSV normalization and deterministic JSONL chunks
+persisted row-range coverage and complete/partial/failed state
+explicit API and UI action to analyze an entire file
+unit, regression, and Azure E2E tests including CORS
+
+Success criteria
+
+every valid CSV data row is processed exactly once for a completed portfolio analysis
+final results expose coverage and supporting source row ranges
+existing artifact APIs, session isolation, and chat behavior remain unchanged
 Phase 4: authentication and operational maturity
 Objective
 Move from local-development assumptions toward secure team use.

@@ -5,6 +5,7 @@ SCRIPT_NAME=$(basename "$0")
 RESOURCE_GROUP=""
 LOCATION=""
 CONTAINER_NAME="agent86-artifacts"
+DERIVED_CONTAINER_NAME="agent86-artifact-derived"
 NAME_PREFIX="agent86"
 SKU="Standard_LRS"
 ENVIRONMENTS_CSV="dev,e2e"
@@ -141,23 +142,24 @@ build_account_name() {
 create_container_if_missing() {
   local account_name="$1"
   local account_key="$2"
+  local container_name="$3"
 
   if az storage container exists \
     --account-name "$account_name" \
     --account-key "$account_key" \
-    --name "$CONTAINER_NAME" \
+    --name "$container_name" \
     --query exists \
     --output tsv | grep -qi '^true$'; then
-    echo "Container '$CONTAINER_NAME' already exists in storage account '$account_name'."
+    echo "Container '$container_name' already exists in storage account '$account_name'."
     return 0
   fi
 
-  echo "Creating blob container '$CONTAINER_NAME' in storage account '$account_name'..."
+  echo "Creating blob container '$container_name' in storage account '$account_name'..."
 
   az storage container create \
     --account-name "$account_name" \
     --account-key "$account_key" \
-    --name "$CONTAINER_NAME" \
+    --name "$container_name" \
     --public-access off \
     --output none
 }
@@ -204,13 +206,15 @@ for environment in "${ENVIRONMENTS[@]}"; do
 
   [[ -n "$account_key" ]] || fail "Failed to retrieve an account key for '$account_name'"
 
-  create_container_if_missing "$account_name" "$account_key"
+  create_container_if_missing "$account_name" "$account_key" "$CONTAINER_NAME"
+  create_container_if_missing "$account_name" "$account_key" "$DERIVED_CONTAINER_NAME"
 
   echo "[$environment] Ready."
   echo "  Resource Group             : $RESOURCE_GROUP"
   echo "  Location                   : $LOCATION"
   echo "  Storage Account            : $account_name"
   echo "  Blob Container             : $CONTAINER_NAME"
+  echo "  Derived Blob Container     : $DERIVED_CONTAINER_NAME"
   echo ""
 
   RESULTING_RESOURCES+=("$environment|$account_name|$CONTAINER_NAME")
