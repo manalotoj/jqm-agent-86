@@ -422,12 +422,11 @@ function MessageBubble({
   isStreaming: boolean;
 }) {
   const isUser = message.role === "user";
-  const isLargeAssistantMessage =
-    !isUser && message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD;
+  const isLargeMessage = message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD;
   const [isCopied, setIsCopied] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(() => !isLargeAssistantMessage || isStreaming);
+  const [isExpanded, setIsExpanded] = useState(() => !isLargeMessage || isStreaming);
   const hasStreamedRef = useRef(isStreaming);
-  const shouldRenderMessageDetails = !isLargeAssistantMessage || isExpanded;
+  const shouldRenderMessageDetails = !isLargeMessage || isExpanded;
   const model = getAssistantModel(message);
   const tools = getAssistantTools(message);
   const artifactIds = getMessageArtifactIds(message);
@@ -442,12 +441,12 @@ function MessageBubble({
       return;
     }
 
-    if (isLargeAssistantMessage && longMessageDisplayMode === "collapsed") {
+    if (isLargeMessage && longMessageDisplayMode === "collapsed") {
       setIsExpanded(false);
       return;
     }
 
-    if (!isLargeAssistantMessage || longMessageDisplayMode === "expanded") {
+    if (!isLargeMessage || longMessageDisplayMode === "expanded") {
       setIsExpanded(true);
       return;
     }
@@ -455,7 +454,7 @@ function MessageBubble({
     if (!hasStreamedRef.current) {
       setIsExpanded(false);
     }
-  }, [isLargeAssistantMessage, isStreaming, longMessageDisplayMode, message.id]);
+  }, [isLargeMessage, isStreaming, longMessageDisplayMode, message.id]);
 
   const handleCopy = async () => {
     try {
@@ -522,13 +521,14 @@ function MessageBubble({
               </span>
             ) : null}
             <div className="ml-auto flex items-center gap-1">
-              {isLargeAssistantMessage && !isStreaming ? (
+              {isLargeMessage && !isStreaming ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon-xs"
+                      className={cn(isUser && "text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground")}
                       aria-label="Expand/collapse message"
                       aria-expanded={isExpanded}
                       onClick={() => setIsExpanded((current) => !current)}
@@ -558,27 +558,32 @@ function MessageBubble({
               </Tooltip>
             </div>
           </div>
-          {isUser ? (
-            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-primary-foreground">
-              {message.content || "…"}
-            </p>
-          ) : isLargeAssistantMessage && !isExpanded ? (
+          {isLargeMessage && !isExpanded ? (
             <div className="mt-2">
-              <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+              <p
+                className={cn(
+                  "whitespace-pre-wrap text-sm leading-6",
+                  isUser ? "text-primary-foreground/80" : "text-muted-foreground",
+                )}
+              >
                 {getMessagePreview(message.content)}
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
-                <span className="text-xs text-muted-foreground">
+                <span className={cn("text-xs", isUser ? "text-primary-foreground/70" : "text-muted-foreground")}>
                   {message.content.length.toLocaleString()} characters
                 </span>
               </div>
             </div>
+          ) : isUser ? (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-primary-foreground">
+              {message.content || "…"}
+            </p>
           ) : message.content ? (
             <MarkdownMessage content={message.content} />
           ) : (
             <p className="mt-2 text-sm leading-6">…</p>
           )}
-          {isUser && resolvedArtifacts.length > 0 ? (
+          {isUser && shouldRenderMessageDetails && resolvedArtifacts.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {resolvedArtifacts.map((artifact) => {
                 const isDownloading = downloadingArtifactId === artifact.id;
@@ -816,9 +821,8 @@ function AuthenticatedApp() {
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD;
   };
 
-  const hasLargeAssistantMessages = messages.some(
-    (message) =>
-      message.role === "assistant" && message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD,
+  const hasLargeMessages = messages.some(
+    (message) => message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD,
   );
 
   const handleLoginOut = () => {
@@ -1445,7 +1449,7 @@ function AuthenticatedApp() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {mainContentView === "chat" && hasLargeAssistantMessages ? (
+                {mainContentView === "chat" && hasLargeMessages ? (
                   <Button
                     type="button"
                     variant="outline"
