@@ -109,6 +109,7 @@ jobs:
           tavily_api_key=$(az keyvault secret show --vault-name "$kv_name" --name tavily-api-key --query value --output tsv 2>/dev/null || true)
           brave_search_api_key=$(az keyvault secret show --vault-name "$kv_name" --name brave-search-api-key --query value --output tsv 2>/dev/null || true)
           appinsights_connection_string=$(az keyvault secret show --vault-name "$kv_name" --name applicationinsights-connection-string --query value --output tsv 2>/dev/null || true)
+          app_configuration_endpoint=$(az appconfig show --resource-group "$rg" --name appcs-agent86-dev --query endpoint --output tsv)
           cosmos_endpoint=$(az cosmosdb show --resource-group "$rg" --name "$cosmos_account" --query documentEndpoint --output tsv)
           echo "storage_account=$storage_account" >> "$GITHUB_OUTPUT"
           echo "kv_name=$kv_name" >> "$GITHUB_OUTPUT"
@@ -120,6 +121,7 @@ jobs:
           echo "tavily_api_key=$tavily_api_key" >> "$GITHUB_OUTPUT"
           echo "brave_search_api_key=$brave_search_api_key" >> "$GITHUB_OUTPUT"
           echo "appinsights_connection_string=$appinsights_connection_string" >> "$GITHUB_OUTPUT"
+          echo "app_configuration_endpoint=$app_configuration_endpoint" >> "$GITHUB_OUTPUT"
 
       - name: Deploy backend services
         shell: bash
@@ -162,6 +164,8 @@ jobs:
             --image-tag "${{ steps.image.outputs.tag }}"
             --api-env "APP_NAME=agent-86"
             --api-env "APP_ENV=dev"
+            --api-env "AZURE_APP_CONFIGURATION_ENDPOINT=${{ steps.resolve.outputs.app_configuration_endpoint }}"
+            --api-env "APP_CONFIGURATION_REFRESH_SECONDS=60"
             --api-env "CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://${{ steps.resolve.outputs.swa_hostname }}"
             --api-env "ENTRA_TENANT_ID=${{ vars.ENTRA_TENANT_ID }}"
             --api-env "ENTRA_API_CLIENT_ID=${{ vars.ENTRA_API_CLIENT_ID }}"
@@ -196,6 +200,18 @@ jobs:
             cmd+=(--deploy-mcp)
           fi
           "${cmd[@]}"
+
+      - name: Grant API access to App Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          rg="${{ inputs.resource_group }}"
+          principal_id=$(az containerapp show --resource-group "$rg" --name aca-agent86-api-dev --query identity.principalId --output tsv)
+          appconfig_id=$(az appconfig show --resource-group "$rg" --name appcs-agent86-dev --query id --output tsv)
+          assignment_count=$(az role assignment list --assignee-object-id "$principal_id" --scope "$appconfig_id" --query "[?roleDefinitionName=='App Configuration Data Reader'] | length(@)" --output tsv)
+          if [[ "${assignment_count:-0}" == "0" ]]; then
+            az role assignment create --assignee-object-id "$principal_id" --assignee-principal-type ServicePrincipal --role "App Configuration Data Reader" --scope "$appconfig_id" --output none
+          fi
 
       - name: Smoke test backend
         shell: bash

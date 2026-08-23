@@ -5,15 +5,15 @@ from agent_86.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def configure_telemetry(settings: Settings) -> None:
+def configure_telemetry(settings: Settings) -> bool:
     if not settings.applicationinsights_connection_string:
-        return
+        return False
 
     try:
         from azure.monitor.opentelemetry import configure_azure_monitor
         from opentelemetry.sdk.resources import Resource
     except ImportError:
-        return
+        return False
 
     resource_attributes = {
         "service.name": settings.otel_service_name,
@@ -28,5 +28,7 @@ def configure_telemetry(settings: Settings) -> None:
             resource=Resource.create(resource_attributes),
             logger_name="agent_86",
         )
+        return True
     except Exception:
         logger.exception("azure_monitor_configuration_failed")
+        return False

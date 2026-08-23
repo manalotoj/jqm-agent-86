@@ -8,6 +8,7 @@ import type {
   DownloadArtifactResult,
   UploadArtifactRequest,
 } from "@/types/artifact";
+import { createInteractionId, trackWorkflowEvent, trackWorkflowException } from "@/telemetry";
 
 function getDownloadFilename(response: Response, fallbackFilename: string) {
   const contentDisposition = response.headers.get("content-disposition") ?? "";
@@ -33,6 +34,8 @@ export async function uploadArtifact(
   sessionId: string,
   request: UploadArtifactRequest,
 ) {
+  const interactionId = createInteractionId();
+  trackWorkflowEvent("artifact.upload.started", interactionId, { content_type: request.file.type || "unknown" });
   const token = await getApiToken(instance, account);
   const formData = new FormData();
   formData.append("file", request.file);
@@ -41,20 +44,31 @@ export async function uploadArtifact(
     formData.append("metadata", JSON.stringify(request.metadata));
   }
 
-  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/artifacts/upload`, {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/artifacts/upload`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
+      "x-agent86-interaction-id": interactionId,
     },
     body: formData,
-  });
+    });
+  } catch (error) {
+    trackWorkflowException(error, interactionId);
+    throw error;
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new ApiError(response.status, body || response.statusText);
+    const error = new ApiError(response.status, body || response.statusText);
+    trackWorkflowException(error, interactionId);
+    throw error;
   }
 
-  return response.json() as Promise<Artifact>;
+  const artifact = await response.json() as Artifact;
+  trackWorkflowEvent("artifact.upload.completed", interactionId, { content_type: request.file.type || "unknown" });
+  return artifact;
 }
 
 export async function downloadArtifact(

@@ -12,6 +12,7 @@ requests
 msal
 openai
 azure-identity
+azure-appconfiguration
 azure-cosmos
 azure-storage-blob
 httpx

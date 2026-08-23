@@ -727,6 +727,28 @@ The Azure deployment path keeps application configuration separate from secret m
 
 Application Insights telemetry is enabled only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is present. The backend assigns the OpenTelemetry resource attributes `service.name`, `deployment.environment`, and, when configured, `service.version`. `OTEL_SERVICE_NAME`, `OTEL_ENVIRONMENT`, and `OTEL_SERVICE_VERSION` can override their corresponding defaults.
 
+### Runtime observability controls
+
+The `infra-dev` workflow provisions `appcs-agent86-dev` with non-secret runtime keys:
+
+- `agent86:backend:log_level`
+- `agent86:frontend:log_level`
+- `agent86:frontend:telemetry_enabled`
+
+The API uses its system-assigned managed identity and the **App Configuration Data Reader** role to poll these keys every 60 seconds (configurable with `APP_CONFIGURATION_REFRESH_SECONDS`). Backend log-level changes apply without a deployment. The browser receives only its Application Insights ingestion connection string and frontend telemetry controls from the unauthenticated, `no-store` `/runtime-config` endpoint; it never receives an App Configuration credential. Application Insights ingestion connection strings are client instrumentation identifiers, not authorization credentials, but they must still only be used for telemetry configuration.
+
+The browser SDK enables W3C dependency correlation. Chat and artifact-upload workflow events include a generated `interaction_id` and pass it to the API in `X-Agent86-Interaction-Id`; raw prompts, responses, file contents, access tokens, and user identities are intentionally not added to telemetry attributes.
+
+After deployment, use these workspace queries to validate the end-to-end path:
+
+```kusto
+AppPageViews | where TimeGenerated > ago(30m) | take 20
+AppDependencies | where TimeGenerated > ago(30m) | take 20
+AppRequests | where TimeGenerated > ago(30m) | take 20
+AppTraces | where TimeGenerated > ago(30m) | take 20
+AppExceptions | where TimeGenerated > ago(30m) | take 20
+```
+
 Do not add connection strings, API keys, or other secret values to repository files, workflow output, pull-request comments, or support tickets. Use Key Vault and Container App secret references for deployed environments.
 
 #### Inspect and troubleshoot deployed backend configuration

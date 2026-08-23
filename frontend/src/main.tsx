@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { msalInstance, initialize } from './auth/msalConfig.ts'
 import './index.css'
 import App from './App.tsx'
+import { API_BASE_URL } from './api/client.ts'
+import { initializeTelemetry } from './telemetry.ts'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,6 +20,7 @@ const queryClient = new QueryClient({
 
 async function bootstrap() {
   try {
+    await initializeTelemetry(API_BASE_URL);
     await initialize();
     createRoot(document.getElementById("root")!).render(
       <MsalProvider instance={msalInstance}>

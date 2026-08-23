@@ -80,6 +80,12 @@ jobs:
           --location "${{ inputs.location }}"
           --workspace-name law-agent86-dev
 
+      - name: Ensure Azure App Configuration
+        run: >-
+          bash "${{ github.workspace }}/common/scripts/azure_app_configuration/ensure_agent86_app_configuration.sh"
+          --resource-group "${{ inputs.resource_group }}"
+          --location "${{ inputs.location }}"
+
       - name: Ensure Key Vault
         shell: bash
         run: |

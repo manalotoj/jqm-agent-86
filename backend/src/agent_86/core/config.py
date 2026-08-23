@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     applicationinsights_connection_string: str | None = None
+    azure_app_configuration_endpoint: str | None = None
+    app_configuration_refresh_seconds: int = Field(default=60, ge=10, le=3600)
     otel_service_name: str = "agent-86-api"
     otel_service_version: str | None = None
     otel_environment: str | None = None

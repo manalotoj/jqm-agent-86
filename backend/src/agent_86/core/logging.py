@@ -10,6 +10,7 @@ from agent_86.core.config import Settings
 
 
 def configure_logging(settings: Settings) -> None:
+    configure_log_level(settings.log_level)
     if structlog is None:
         logging.basicConfig(
             level=_coerce_log_level(settings.log_level),
@@ -62,6 +63,13 @@ def configure_logging(settings: Settings) -> None:
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
+
+
+def configure_log_level(value: str) -> None:
+    """Apply a runtime log level without replacing stdout's JSON handlers."""
+    level = _coerce_log_level(value)
+    logging.getLogger().setLevel(level)
+    logging.getLogger("agent_86").setLevel(level)
 
 
 def get_logger(name: str):

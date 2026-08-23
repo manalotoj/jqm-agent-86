@@ -29,8 +29,11 @@ from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
 from agent_86.services.tool_service import ToolService
 from agent_86.tools.tool import ToolContext
+from agent_86.core.observability import add_workflow_event
+from agent_86.core.logging import get_logger
 
 router = APIRouter(prefix="/sessions/{session_id}/chat", tags=["chat"])
+logger = get_logger(__name__)
 
 
 def is_web_search_enabled(metadata: dict | None) -> bool:
@@ -409,6 +412,8 @@ async def chat_stream(
     tool_service: ToolService = Depends(get_tool_service),
 ) -> StreamingResponse:
     await ensure_session_exists(user.user_id, session_id, session_service)
+    interaction_id = getattr(request, "state", None) and getattr(request.state, "interaction_id", None)
+    add_workflow_event("chat.stream.started", interaction_id=interaction_id, model_tier="requested")
 
     async def event_generator() -> AsyncIterator[str]:
         queue: asyncio.Queue[ChatStreamEventSchema] = asyncio.Queue()
@@ -473,6 +478,8 @@ async def chat_stream(
                     )
                 )
             except Exception as exc:
+                logger.exception("chat_stream_failed", interaction_id=interaction_id, session_id=session_id)
+                add_workflow_event("chat.stream.failed", interaction_id=interaction_id)
                 await queue.put(to_stream_event("error", {"message": str(exc)}))
             finally:
                 await queue.put(to_stream_event("done", {}))

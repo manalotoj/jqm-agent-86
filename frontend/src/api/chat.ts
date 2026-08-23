@@ -3,6 +3,7 @@ import type { AccountInfo, IPublicClientApplication } from "@azure/msal-browser"
 import { API_BASE_URL, ApiError } from "@/api/client";
 import { getApiToken } from "@/auth/getApiToken";
 import type { ChatRequest, ChatStreamCallbacks, ChatStreamEvent } from "@/types/chat";
+import { createInteractionId, trackWorkflowEvent, trackWorkflowException } from "@/telemetry";
 
 function createEventDispatcher(callbacks: ChatStreamCallbacks) {
   return (event: ChatStreamEvent) => {
@@ -81,24 +82,35 @@ export async function streamChat(
   request: ChatRequest,
   callbacks: ChatStreamCallbacks = {},
 ) {
+  const interactionId = createInteractionId();
+  trackWorkflowEvent("chat.stream.started", interactionId);
   const token = await getApiToken(instance, account);
-  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/chat/stream`, {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
       Authorization: `Bearer ${token}`,
+      "x-agent86-interaction-id": interactionId,
     },
     body: JSON.stringify({
       content: request.content,
       metadata: request.metadata ?? {},
       tools: request.tools ?? [],
     }),
-  });
+    });
+  } catch (error) {
+    trackWorkflowException(error, interactionId);
+    throw error;
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new ApiError(response.status, body || response.statusText);
+    const error = new ApiError(response.status, body || response.statusText);
+    trackWorkflowException(error, interactionId);
+    throw error;
   }
 
   if (!response.body) {
@@ -138,4 +150,5 @@ export async function streamChat(
   } finally {
     reader.releaseLock();
   }
+  trackWorkflowEvent("chat.stream.completed", interactionId);
 }
