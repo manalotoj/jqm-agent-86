@@ -426,6 +426,7 @@ function MessageBubble({
     !isUser && message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD;
   const [isCopied, setIsCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(() => !isLargeAssistantMessage || isStreaming);
+  const hasStreamedRef = useRef(isStreaming);
   const shouldRenderMessageDetails = !isLargeAssistantMessage || isExpanded;
   const model = getAssistantModel(message);
   const tools = getAssistantTools(message);
@@ -435,12 +436,23 @@ function MessageBubble({
     .filter((artifact): artifact is Artifact => artifact !== null);
 
   useEffect(() => {
-    if (!isLargeAssistantMessage || isStreaming || longMessageDisplayMode === "expanded") {
+    if (isStreaming) {
+      hasStreamedRef.current = true;
       setIsExpanded(true);
       return;
     }
 
-    if (longMessageDisplayMode === "collapsed") {
+    if (isLargeAssistantMessage && longMessageDisplayMode === "collapsed") {
+      setIsExpanded(false);
+      return;
+    }
+
+    if (!isLargeAssistantMessage || longMessageDisplayMode === "expanded") {
+      setIsExpanded(true);
+      return;
+    }
+
+    if (!hasStreamedRef.current) {
       setIsExpanded(false);
     }
   }, [isLargeAssistantMessage, isStreaming, longMessageDisplayMode, message.id]);
