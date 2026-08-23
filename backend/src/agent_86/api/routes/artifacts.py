@@ -4,12 +4,16 @@ import json
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import Response as FastAPIResponse
 
-from agent_86.api.dependencies import get_artifact_service, get_message_service, get_session_service
+from agent_86.api.dependencies import get_artifact_analysis_service, get_artifact_processing_service, get_artifact_service, get_message_service, get_session_service
 from agent_86.auth.dependencies import get_authenticated_user
 from agent_86.auth.models import AuthenticatedUser
 from agent_86.core.config import get_settings
 from agent_86.domain.models.artifact import Artifact
 from agent_86.domain.schemas.artifact import ArtifactResponse, CreateGeneratedArtifactRequest
+from agent_86.domain.schemas.artifact_analysis import ArtifactAnalysisJobResponse, ArtifactProcessingManifestResponse
+from agent_86.domain.models.artifact_analysis import ArtifactAnalysisJob, ArtifactProcessingManifest
+from agent_86.services.artifact_analysis_service import ArtifactAnalysisService
+from agent_86.services.artifact_processing_service import ArtifactProcessingService
 from agent_86.services.artifact_service import ArtifactNotFoundError, ArtifactService, MessageNotFoundError
 from agent_86.services.message_service import MessageService
 from agent_86.services.session_service import SessionService
@@ -27,6 +31,43 @@ def to_response(artifact: Artifact) -> ArtifactResponse:
         size_bytes=artifact.size_bytes,
         metadata=artifact.metadata,
         created_at=artifact.created_at,
+    )
+
+
+def to_processing_response(manifest: ArtifactProcessingManifest) -> ArtifactProcessingManifestResponse:
+    return ArtifactProcessingManifestResponse(
+        id=manifest.id,
+        artifact_id=manifest.artifact_id,
+        source_sha256=manifest.source_sha256,
+        state=manifest.state,
+        headers=manifest.headers,
+        total_rows=manifest.total_rows,
+        chunk_count=manifest.chunk_count,
+        chunk_row_ranges=manifest.chunk_row_ranges,
+        error_detail=manifest.error_detail,
+        created_at=manifest.created_at,
+        updated_at=manifest.updated_at,
+    )
+
+
+def to_analysis_response(job: ArtifactAnalysisJob) -> ArtifactAnalysisJobResponse:
+    return ArtifactAnalysisJobResponse(
+        id=job.id,
+        artifact_id=job.artifact_id,
+        source_sha256=job.source_sha256,
+        analysis_type=job.analysis_type,
+        state=job.state,
+        expected_rows=job.expected_rows,
+        successful_rows=job.successful_rows,
+        failed_rows=job.failed_rows,
+        expected_chunks=job.expected_chunks,
+        successful_chunks=job.successful_chunks,
+        failed_chunks=job.failed_chunks,
+        findings=job.findings,
+        findings_blob_name=job.findings_blob_name,
+        error_detail=job.error_detail,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
     )
 
 
@@ -202,3 +243,75 @@ async def download_artifact(
             "Content-Disposition": f'attachment; filename="{result.artifact.filename}"',
         },
     )
+
+
+@router.post("/{artifact_id}/process", response_model=ArtifactProcessingManifestResponse)
+async def process_artifact(
+    session_id: str,
+    artifact_id: str,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+    session_service: SessionService = Depends(get_session_service),
+    processing_service: ArtifactProcessingService = Depends(get_artifact_processing_service),
+) -> ArtifactProcessingManifestResponse:
+    await ensure_session_exists(user.user_id, session_id, session_service)
+    try:
+        manifest = await processing_service.process_artifact(
+            user_id=user.user_id, session_id=session_id, artifact_id=artifact_id
+        )
+    except ArtifactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return to_processing_response(manifest)
+
+
+@router.get("/{artifact_id}/processing", response_model=ArtifactProcessingManifestResponse)
+async def get_artifact_processing(
+    session_id: str,
+    artifact_id: str,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+    session_service: SessionService = Depends(get_session_service),
+    processing_service: ArtifactProcessingService = Depends(get_artifact_processing_service),
+) -> ArtifactProcessingManifestResponse:
+    await ensure_session_exists(user.user_id, session_id, session_service)
+    try:
+        manifest = await processing_service.get_manifest(
+            user_id=user.user_id, session_id=session_id, artifact_id=artifact_id
+        )
+    except ArtifactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if manifest is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact processing has not been requested")
+    return to_processing_response(manifest)
+
+
+@router.post("/{artifact_id}/analyze", response_model=ArtifactAnalysisJobResponse)
+async def analyze_entire_artifact(
+    session_id: str,
+    artifact_id: str,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+    session_service: SessionService = Depends(get_session_service),
+    analysis_service: ArtifactAnalysisService = Depends(get_artifact_analysis_service),
+) -> ArtifactAnalysisJobResponse:
+    await ensure_session_exists(user.user_id, session_id, session_service)
+    try:
+        job = await analysis_service.analyze_entire_file(
+            user_id=user.user_id, session_id=session_id, artifact_id=artifact_id
+        )
+    except ArtifactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return to_analysis_response(job)
+
+
+@router.get("/{artifact_id}/analysis/{job_id}", response_model=ArtifactAnalysisJobResponse)
+async def get_artifact_analysis(
+    session_id: str,
+    artifact_id: str,
+    job_id: str,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+    session_service: SessionService = Depends(get_session_service),
+    analysis_service: ArtifactAnalysisService = Depends(get_artifact_analysis_service),
+) -> ArtifactAnalysisJobResponse:
+    await ensure_session_exists(user.user_id, session_id, session_service)
+    job = await analysis_service.get_job(user_id=user.user_id, session_id=session_id, job_id=job_id)
+    if job is None or job.artifact_id != artifact_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact analysis job not found")
+    return to_analysis_response(job)

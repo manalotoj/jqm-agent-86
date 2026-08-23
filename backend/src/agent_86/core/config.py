@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     cosmos_messages_container_name: str = "messages"
     cosmos_artifacts_container_name: str = "artifacts"
     cosmos_summaries_container_name: str = "summaries"
+    cosmos_artifact_processing_container_name: str = "artifact-processing"
+    cosmos_artifact_analysis_jobs_container_name: str = "artifact-analysis-jobs"
     cosmos_verify_ssl: bool = True
 
     azure_blob_connection_string: str = Field(min_length=1)

@@ -27,6 +27,8 @@ os.environ.setdefault(
 
 from agent_86.api.dependencies import (
     get_artifact_service,
+    get_artifact_processing_service,
+    get_artifact_analysis_service,
     get_artifact_prompt_context_service,
     get_chat_model_service,
     get_message_service,
@@ -49,8 +51,11 @@ from agent_86.domain.schemas.session_summary import ActionItem, ArtifactRef, Cha
 from agent_86.main import create_app
 from agent_86.repositories.in_memory_session_repository import InMemorySessionRepository
 from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.artifact_processing_service import ArtifactProcessingService
+from agent_86.services.artifact_analysis_service import ArtifactAnalysisService
 from agent_86.services.artifact_prompt_context_service import ArtifactPromptContextService
 from agent_86.services.blob_storage_service import BlobDownload
+from agent_86.services.csv_artifact_processor import CsvArtifactProcessor
 from agent_86.services.chat_model_service import ChatModelReply
 from agent_86.services.message_service import MessageService
 from agent_86.services.session_service import SessionService
@@ -214,6 +219,41 @@ class InMemoryBlobStorageService:
         self._blobs.pop(blob_name, None)
 
 
+class InMemoryProcessingRepository:
+    def __init__(self) -> None:
+        self._manifests = {}
+
+    async def get_manifest(self, user_id, session_id, artifact_id, source_sha256):
+        return self._manifests.get((user_id, session_id, artifact_id, source_sha256))
+
+    async def upsert_manifest(self, manifest):
+        self._manifests[(manifest.user_id, manifest.session_id, manifest.artifact_id, manifest.source_sha256)] = manifest
+        return manifest
+
+
+class InMemoryAnalysisJobRepository:
+    def __init__(self) -> None:
+        self._jobs = {}
+
+    async def get_job(self, user_id, session_id, job_id):
+        return self._jobs.get((user_id, session_id, job_id))
+
+    async def get_job_by_idempotency_key(self, user_id, session_id, artifact_id, source_sha256, analysis_type):
+        return next(
+            (
+                job
+                for job in self._jobs.values()
+                if (job.user_id, job.session_id, job.artifact_id, job.source_sha256, job.analysis_type)
+                == (user_id, session_id, artifact_id, source_sha256, analysis_type)
+            ),
+            None,
+        )
+
+    async def upsert_job(self, job):
+        self._jobs[(job.user_id, job.session_id, job.id)] = job
+        return job
+
+
 class InMemorySessionSummaryRepository:
     def __init__(self) -> None:
         self._summaries: dict[tuple[str, str], SessionSummary] = {}
@@ -271,6 +311,16 @@ def api_client():
         InMemoryArtifactRepository(),
         InMemoryBlobStorageService(),
     )
+    derived_blob_storage = InMemoryBlobStorageService()
+    processing_service = ArtifactProcessingService(
+        artifact_service,
+        InMemoryProcessingRepository(),
+        derived_blob_storage,
+        CsvArtifactProcessor(max_rows=10, chunk_rows=2),
+    )
+    analysis_service = ArtifactAnalysisService(
+        processing_service, InMemoryAnalysisJobRepository(), derived_blob_storage
+    )
     artifact_prompt_context_service = ArtifactPromptContextService(artifact_service)
     chat_model_service = SimpleNamespace(
         generate_reply=AsyncMock(
@@ -305,6 +355,8 @@ def api_client():
     app.dependency_overrides[get_session_service] = lambda: session_service
     app.dependency_overrides[get_message_service] = lambda: message_service
     app.dependency_overrides[get_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[get_artifact_processing_service] = lambda: processing_service
+    app.dependency_overrides[get_artifact_analysis_service] = lambda: analysis_service
     app.dependency_overrides[get_artifact_prompt_context_service] = lambda: artifact_prompt_context_service
     app.dependency_overrides[get_chat_model_service] = lambda: chat_model_service
     app.dependency_overrides[get_model_router] = lambda: model_router
@@ -334,6 +386,115 @@ def create_session_for(client: TestClient, token: str, title: str = "Session") -
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def upload_artifact_for(client: TestClient, token: str, session_id: str, filename: str, content: bytes, content_type: str) -> dict:
+    response = client.post(
+        f"/sessions/{session_id}/artifacts/upload",
+        headers=auth_header(token),
+        files={"file": (filename, content, content_type)},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_artifact_processing_routes_are_owned_idempotent_and_report_status(api_client):
+    client, _, _, _, _, _ = api_client
+    session = create_session_for(client, "valid-user-1", title="CSV processing")
+    artifact = upload_artifact_for(
+        client, "valid-user-1", session["id"], "positions.csv", b"symbol,quantity\nMSFT,10\nAAPL,20\n", "text/csv"
+    )
+    processing_url = f"/sessions/{session['id']}/artifacts/{artifact['id']}/process"
+
+    first = client.post(processing_url, headers=auth_header("valid-user-1"))
+    second = client.post(processing_url, headers=auth_header("valid-user-1"))
+    status_response = client.get(
+        f"/sessions/{session['id']}/artifacts/{artifact['id']}/processing", headers=auth_header("valid-user-1")
+    )
+
+    assert first.status_code == 200, first.text
+    assert first.json()["state"] == "ready"
+    assert first.json()["total_rows"] == 2
+    assert first.json()["chunk_row_ranges"] == [[1, 2]]
+    assert second.json()["id"] == first.json()["id"]
+    assert status_response.status_code == 200
+    assert status_response.json()["id"] == first.json()["id"]
+
+
+def test_artifact_processing_routes_hide_other_users_artifacts(api_client):
+    client, _, _, _, _, _ = api_client
+    owner_session = create_session_for(client, "valid-user-1")
+    artifact = upload_artifact_for(
+        client, "valid-user-1", owner_session["id"], "positions.csv", b"symbol\nMSFT\n", "text/csv"
+    )
+    other_session = create_session_for(client, "valid-user-2")
+
+    response = client.post(
+        f"/sessions/{other_session['id']}/artifacts/{artifact['id']}/process", headers=auth_header("valid-user-2")
+    )
+
+    assert response.status_code == 404
+
+
+def test_artifact_processing_route_persists_unsupported_non_csv_status(api_client):
+    client, _, _, _, _, _ = api_client
+    session = create_session_for(client, "valid-user-1")
+    artifact = upload_artifact_for(client, "valid-user-1", session["id"], "notes.txt", b"hello", "text/plain")
+
+    response = client.post(
+        f"/sessions/{session['id']}/artifacts/{artifact['id']}/process", headers=auth_header("valid-user-1")
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "unsupported"
+
+
+def test_entire_csv_analysis_is_complete_idempotent_and_retrievable(api_client):
+    client, _, _, _, _, _ = api_client
+    session = create_session_for(client, "valid-user-1")
+    artifact = upload_artifact_for(
+        client, "valid-user-1", session["id"], "positions.csv", b"symbol,quantity\nMSFT,10\nAAPL,\n", "text/csv"
+    )
+    analysis_url = f"/sessions/{session['id']}/artifacts/{artifact['id']}/analyze"
+
+    first = client.post(analysis_url, headers=auth_header("valid-user-1"))
+    second = client.post(analysis_url, headers=auth_header("valid-user-1"))
+    status_response = client.get(
+        f"/sessions/{session['id']}/artifacts/{artifact['id']}/analysis/{first.json()['id']}",
+        headers=auth_header("valid-user-1"),
+    )
+
+    assert first.status_code == 200, first.text
+    assert first.json()["state"] == "completed"
+    assert first.json()["successful_rows"] == 2
+    assert first.json()["successful_chunks"] == 1
+    assert first.json()["findings"]["non_empty_values_by_column"] == {"symbol": 2, "quantity": 1}
+    assert second.json()["id"] == first.json()["id"]
+    assert status_response.status_code == 200
+
+
+def test_artifact_analysis_routes_hide_other_users_jobs_and_artifacts(api_client):
+    client, _, _, _, _, _ = api_client
+    owner_session = create_session_for(client, "valid-user-1")
+    artifact = upload_artifact_for(
+        client, "valid-user-1", owner_session["id"], "positions.csv", b"symbol\nMSFT\n", "text/csv"
+    )
+    job_response = client.post(
+        f"/sessions/{owner_session['id']}/artifacts/{artifact['id']}/analyze", headers=auth_header("valid-user-1")
+    )
+    other_session = create_session_for(client, "valid-user-2")
+
+    create_response = client.post(
+        f"/sessions/{other_session['id']}/artifacts/{artifact['id']}/analyze", headers=auth_header("valid-user-2")
+    )
+    get_response = client.get(
+        f"/sessions/{other_session['id']}/artifacts/{artifact['id']}/analysis/{job_response.json()['id']}",
+        headers=auth_header("valid-user-2"),
+    )
+
+    assert job_response.status_code == 200, job_response.text
+    assert create_response.status_code == 404
+    assert get_response.status_code == 404
 
 
 def test_missing_token_returns_401(api_client):

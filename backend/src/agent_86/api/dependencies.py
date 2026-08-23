@@ -9,14 +9,18 @@ from agent_86.integrations.bicep.bicep_tool_client import BicepToolClient
 from agent_86.integrations.azure.resource_export_client import ResourceExportClient
 from agent_86.integrations.bicep_composition.composition_api_client import CompositionApiClient
 from agent_86.repositories.cosmos_artifact_repository import CosmosArtifactRepository
+from agent_86.repositories.cosmos_artifact_analysis_repository import CosmosArtifactAnalysisJobRepository, CosmosArtifactProcessingRepository
 from agent_86.repositories.cosmos_message_repository import CosmosMessageRepository
 from agent_86.repositories.cosmos_session_repository import CosmosSessionRepository
 from agent_86.repositories.cosmos_session_summary_repository import CosmosSessionSummaryRepository
 from agent_86.services.artifact_service import ArtifactService
+from agent_86.services.artifact_processing_service import ArtifactProcessingService
+from agent_86.services.artifact_analysis_service import ArtifactAnalysisService
 from agent_86.services.artifact_prompt_context_service import ArtifactPromptContextService
 from agent_86.services.azure_blob_storage_service import AzureBlobStorageService
 from agent_86.services.blob_storage_service import BlobStorageService
 from agent_86.services.chat_model_service import ChatModelService
+from agent_86.services.csv_artifact_processor import CsvArtifactProcessor
 from agent_86.services.message_service import MessageService
 from agent_86.services.model_router import ModelRouter
 from agent_86.services.session_service import SessionService
@@ -66,6 +70,20 @@ def _artifacts_container():
 
 
 @lru_cache(maxsize=1)
+def _artifact_processing_container():
+    settings = _settings()
+    database = _cosmos_client().get_database_client(settings.cosmos_database_name)
+    return database.get_container_client(settings.cosmos_artifact_processing_container_name)
+
+
+@lru_cache(maxsize=1)
+def _artifact_analysis_jobs_container():
+    settings = _settings()
+    database = _cosmos_client().get_database_client(settings.cosmos_database_name)
+    return database.get_container_client(settings.cosmos_artifact_analysis_jobs_container_name)
+
+
+@lru_cache(maxsize=1)
 def _summaries_container():
     settings = _settings()
     database = _cosmos_client().get_database_client(settings.cosmos_database_name)
@@ -91,6 +109,16 @@ def _artifact_repository() -> CosmosArtifactRepository:
 
 
 @lru_cache(maxsize=1)
+def _artifact_processing_repository() -> CosmosArtifactProcessingRepository:
+    return CosmosArtifactProcessingRepository(_artifact_processing_container())
+
+
+@lru_cache(maxsize=1)
+def _artifact_analysis_job_repository() -> CosmosArtifactAnalysisJobRepository:
+    return CosmosArtifactAnalysisJobRepository(_artifact_analysis_jobs_container())
+
+
+@lru_cache(maxsize=1)
 def _session_summary_repository() -> CosmosSessionSummaryRepository:
     return CosmosSessionSummaryRepository(_summaries_container())
 
@@ -101,6 +129,15 @@ def _blob_storage_service() -> BlobStorageService:
     return AzureBlobStorageService(
         connection_string=settings.azure_blob_connection_string,
         container_name=settings.azure_blob_container_name,
+    )
+
+
+@lru_cache(maxsize=1)
+def _derived_blob_storage_service() -> BlobStorageService:
+    settings = _settings()
+    return AzureBlobStorageService(
+        connection_string=settings.azure_blob_connection_string,
+        container_name=settings.azure_blob_derived_container_name,
     )
 
 
@@ -122,6 +159,24 @@ def _message_service_instance() -> MessageService:
 @lru_cache(maxsize=1)
 def _artifact_service_instance() -> ArtifactService:
     return ArtifactService(_artifact_repository(), _blob_storage_service())
+
+
+@lru_cache(maxsize=1)
+def _artifact_processing_service_instance() -> ArtifactProcessingService:
+    settings = _settings()
+    return ArtifactProcessingService(
+        _artifact_service_instance(),
+        _artifact_processing_repository(),
+        _derived_blob_storage_service(),
+        CsvArtifactProcessor(max_rows=settings.artifact_csv_max_rows, chunk_rows=settings.artifact_csv_chunk_rows),
+    )
+
+
+@lru_cache(maxsize=1)
+def _artifact_analysis_service_instance() -> ArtifactAnalysisService:
+    return ArtifactAnalysisService(
+        _artifact_processing_service_instance(), _artifact_analysis_job_repository(), _derived_blob_storage_service()
+    )
 
 
 @lru_cache(maxsize=1)
@@ -202,6 +257,14 @@ def get_message_service() -> MessageService:
 
 def get_artifact_service() -> ArtifactService:
     return _artifact_service_instance()
+
+
+def get_artifact_processing_service() -> ArtifactProcessingService:
+    return _artifact_processing_service_instance()
+
+
+def get_artifact_analysis_service() -> ArtifactAnalysisService:
+    return _artifact_analysis_service_instance()
 
 
 def get_artifact_prompt_context_service() -> ArtifactPromptContextService:
