@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     artifact_csv_chunk_rows: int = Field(default=500, ge=1)
     artifact_analysis_findings_inline_max_bytes: int = Field(default=64 * 1024, ge=1)
     artifact_analysis_claim_lease_seconds: int = Field(default=300, ge=1)
+    artifact_image_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1)
 
     foundry_openai_base_url: str
     foundry_openai_api_key: str = Field(min_length=1)

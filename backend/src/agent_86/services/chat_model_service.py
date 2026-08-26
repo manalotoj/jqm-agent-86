@@ -367,6 +367,20 @@ class ChatModelService:
             content=content,
         )
 
+    def _build_multimodal_message_item(
+        self,
+        role: str,
+        text: str,
+        image_blocks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": text}]
+        content.extend(image_blocks)
+        return {
+            "type": "message",
+            "role": role,
+            "content": content,
+        }
+
     def _message_to_responses_item(self, message: Message) -> dict[str, Any]:
         if message.role == "assistant" and message.metadata.get("message_type") == "function_call":
             return self._build_tool_call_item(
@@ -381,7 +395,17 @@ class ChatModelService:
                 output=message.content,
             )
 
-        if message.role in {"system", "user", "assistant"}:
+        if message.role == "user":
+            image_blocks = message.metadata.get("_image_content_blocks")
+            if isinstance(image_blocks, list) and image_blocks:
+                return self._build_multimodal_message_item(
+                    role="user",
+                    text=message.content,
+                    image_blocks=image_blocks,
+                )
+            return self._build_message_item("user", message.content)
+
+        if message.role in {"system", "assistant"}:
             return self._build_message_item(message.role, message.content)
 
         return self._build_message_item("system", message.content)

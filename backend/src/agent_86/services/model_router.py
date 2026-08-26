@@ -18,3 +18,7 @@ class ModelRouter:
             return self._settings.foundry_default_chat_model
 
         return self._settings.foundry_default_chat_model
+
+    @property
+    def premium_model(self) -> str:
+        return self._settings.foundry_premium_chat_model

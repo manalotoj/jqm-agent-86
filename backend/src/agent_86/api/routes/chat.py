@@ -297,6 +297,30 @@ async def persist_assistant_message(
     return persisted_assistant_message or assistant_message
 
 
+def _inject_image_blocks_into_last_user_message(
+    history: list[Message],
+    image_content_blocks: list[dict],
+) -> list[Message]:
+    """Return a new history list where the last user message carries image_content_blocks
+    in its metadata so that ChatModelService can emit a multimodal content array for it."""
+    result = list(history)
+    for i in range(len(result) - 1, -1, -1):
+        if result[i].role == "user":
+            msg = result[i]
+            updated_metadata = {**msg.metadata, "_image_content_blocks": image_content_blocks}
+            result[i] = Message(
+                id=msg.id,
+                session_id=msg.session_id,
+                user_id=msg.user_id,
+                role=msg.role,
+                content=msg.content,
+                metadata=updated_metadata,
+                created_at=msg.created_at,
+            )
+            break
+    return result
+
+
 async def prepare_chat_context(
     user_id: str,
     session_id: str,
@@ -335,6 +359,13 @@ async def prepare_chat_context(
     )
     if artifact_prompt_context.context_message is not None:
         history = [artifact_prompt_context.context_message, *history]
+
+    if artifact_prompt_context.requires_vision and artifact_prompt_context.image_content_blocks:
+        selected_model = model_router.premium_model
+        history = _inject_image_blocks_into_last_user_message(
+            history,
+            artifact_prompt_context.image_content_blocks,
+        )
 
     return selected_model, tool_names, history
 

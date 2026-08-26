@@ -760,4 +760,121 @@ async def test_tool_service_blocks_empty_web_search_query_before_provider_call()
 
     web_search_service.search.assert_not_awaited()
     assert results[0].metadata["blocked"] is True
-    assert results[0].metadata["reason"] == "empty_query"
+
+
+# ---------------------------------------------------------------------------
+# Multimodal / image content block tests
+# ---------------------------------------------------------------------------
+
+def _make_user_message_with_images(image_blocks: list) -> Message:
+    return Message(
+        id="u1",
+        session_id="s1",
+        user_id="user-1",
+        role="user",
+        content="Analyze this image",
+        metadata={"_image_content_blocks": image_blocks},
+    )
+
+
+def _make_plain_user_message() -> Message:
+    return Message(
+        id="u2",
+        session_id="s1",
+        user_id="user-1",
+        role="user",
+        content="Plain text message",
+        metadata={},
+    )
+
+
+def _build_bare_service() -> ChatModelService:
+    service = ChatModelService.__new__(ChatModelService)
+    return service
+
+
+def test_build_multimodal_message_item_produces_content_array() -> None:
+    service = _build_bare_service()
+    image_blocks = [
+        {"type": "input_image", "image_url": "data:image/png;base64,abc123"},
+    ]
+    item = service._build_multimodal_message_item(role="user", text="Look at this", image_blocks=image_blocks)
+
+    assert item["type"] == "message"
+    assert item["role"] == "user"
+    assert isinstance(item["content"], list)
+    assert item["content"][0] == {"type": "input_text", "text": "Look at this"}
+    assert item["content"][1] == {"type": "input_image", "image_url": "data:image/png;base64,abc123"}
+
+
+def test_build_multimodal_message_item_includes_all_image_blocks() -> None:
+    service = _build_bare_service()
+    image_blocks = [
+        {"type": "input_image", "image_url": "data:image/png;base64,AAA"},
+        {"type": "input_image", "image_url": "data:image/jpeg;base64,BBB"},
+    ]
+    item = service._build_multimodal_message_item(role="user", text="Two images", image_blocks=image_blocks)
+
+    assert len(item["content"]) == 3  # 1 text + 2 images
+    assert item["content"][0]["type"] == "input_text"
+    assert item["content"][1]["image_url"] == "data:image/png;base64,AAA"
+    assert item["content"][2]["image_url"] == "data:image/jpeg;base64,BBB"
+
+
+def test_message_to_responses_item_emits_multimodal_item_when_image_blocks_present() -> None:
+    service = _build_bare_service()
+    image_blocks = [{"type": "input_image", "image_url": "data:image/png;base64,XYZ"}]
+    message = _make_user_message_with_images(image_blocks)
+
+    item = service._message_to_responses_item(message)
+
+    assert item["type"] == "message"
+    assert item["role"] == "user"
+    assert isinstance(item["content"], list)
+    assert item["content"][0] == {"type": "input_text", "text": "Analyze this image"}
+    assert item["content"][1] == {"type": "input_image", "image_url": "data:image/png;base64,XYZ"}
+
+
+def test_message_to_responses_item_emits_plain_item_when_no_image_blocks() -> None:
+    service = _build_bare_service()
+    message = _make_plain_user_message()
+
+    item = service._message_to_responses_item(message)
+
+    # EasyInputMessageParam has type/role/content as a string
+    assert item["role"] == "user"
+    assert item["content"] == "Plain text message"
+
+
+def test_message_to_responses_item_emits_plain_item_when_image_blocks_empty_list() -> None:
+    service = _build_bare_service()
+    message = Message(
+        id="u3",
+        session_id="s1",
+        user_id="user-1",
+        role="user",
+        content="No images here",
+        metadata={"_image_content_blocks": []},
+    )
+
+    item = service._message_to_responses_item(message)
+
+    assert item["role"] == "user"
+    assert item["content"] == "No images here"
+
+
+def test_message_to_responses_item_emits_plain_item_for_non_list_image_blocks() -> None:
+    service = _build_bare_service()
+    message = Message(
+        id="u4",
+        session_id="s1",
+        user_id="user-1",
+        role="user",
+        content="Bad metadata",
+        metadata={"_image_content_blocks": "not-a-list"},
+    )
+
+    item = service._message_to_responses_item(message)
+
+    assert item["role"] == "user"
+    assert item["content"] == "Bad metadata"

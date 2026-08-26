@@ -183,7 +183,10 @@ def _artifact_analysis_service_instance() -> ArtifactAnalysisService:
 
 @lru_cache(maxsize=1)
 def _artifact_prompt_context_service_instance() -> ArtifactPromptContextService:
-    return ArtifactPromptContextService(_artifact_service_instance())
+    return ArtifactPromptContextService(
+        _artifact_service_instance(),
+        image_max_bytes=_settings().artifact_image_max_bytes,
+    )
 
 
 @lru_cache(maxsize=1)
