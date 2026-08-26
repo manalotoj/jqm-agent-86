@@ -413,6 +413,7 @@ function MessageBubble({
   downloadingArtifactId,
   longMessageDisplayMode,
   isStreaming,
+  isJustStreamed,
 }: {
   message: Message;
   attachedArtifacts: Artifact[];
@@ -420,12 +421,13 @@ function MessageBubble({
   downloadingArtifactId: string | null;
   longMessageDisplayMode: LongMessageDisplayMode;
   isStreaming: boolean;
+  isJustStreamed: boolean;
 }) {
   const isUser = message.role === "user";
   const isLargeMessage = message.content.length >= LARGE_MESSAGE_CHARACTER_THRESHOLD;
   const [isCopied, setIsCopied] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(() => !isLargeMessage || isStreaming);
-  const hasStreamedRef = useRef(isStreaming);
+  const [isExpanded, setIsExpanded] = useState(() => !isLargeMessage || isStreaming || isJustStreamed);
+  const hasStreamedRef = useRef(isStreaming || isJustStreamed);
   const shouldRenderMessageDetails = !isLargeMessage || isExpanded;
   const model = getAssistantModel(message);
   const tools = getAssistantTools(message);
@@ -670,6 +672,7 @@ function AuthenticatedApp() {
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
   const [isStreamingActive, setIsStreamingActive] = useState(false);
   const [lastStreamModel, setLastStreamModel] = useState<string | null>(null);
+  const [lastCompletedStreamMessageId, setLastCompletedStreamMessageId] = useState<string | null>(null);
   const [longMessageDisplayMode, setLongMessageDisplayMode] =
     useState<LongMessageDisplayMode>("default");
 
@@ -716,6 +719,7 @@ function AuthenticatedApp() {
     setStreamingStatus(null);
     setIsStreamingActive(false);
     setLastStreamModel(null);
+    setLastCompletedStreamMessageId(null);
     setLongMessageDisplayMode("default");
     shouldAutoScrollRef.current = true;
   }, [selectedSession?.id]);
@@ -1136,6 +1140,7 @@ function AuthenticatedApp() {
                 );
                 return [...withoutOptimisticAssistant, completedMessage];
               });
+              setLastCompletedStreamMessageId(completedMessage.id);
             }
 
             setStreamingStatus("Response complete.");
@@ -1554,6 +1559,7 @@ function AuthenticatedApp() {
                         isStreaming={
                           isStreamingActive && message.id === lastAssistantMessage?.id
                         }
+                        isJustStreamed={message.id === lastCompletedStreamMessageId}
                       />
                     ))}
                   </div>
