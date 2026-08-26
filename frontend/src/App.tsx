@@ -441,7 +441,7 @@ function MessageBubble({
       return;
     }
 
-    if (isLargeMessage && longMessageDisplayMode === "collapsed") {
+    if (isLargeMessage && longMessageDisplayMode === "collapsed" && !hasStreamedRef.current) {
       setIsExpanded(false);
       return;
     }
