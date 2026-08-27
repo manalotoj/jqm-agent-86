@@ -78,8 +78,12 @@ class CosmosSessionSummaryRepository:
             "open_questions": summary.open_questions,
             "tools_used": summary.tools_used,
             "tags": summary.tags,
+            "continuation_context": summary.continuation_context,
             "created_at": summary.created_at.isoformat().replace("+00:00", "Z"),
             "updated_at": summary.updated_at.isoformat().replace("+00:00", "Z"),
+            # TODO: If continuation_context or other fields grow large enough to approach
+            # the Cosmos 2 MB document limit, add a summary_blob_name field here and
+            # implement a blob overflow read/write path in the repository.
         }
 
     def _from_document(self, document: dict) -> SessionSummary:
@@ -100,6 +104,7 @@ class CosmosSessionSummaryRepository:
             open_questions=list(document.get("open_questions", [])),
             tools_used=list(document.get("tools_used", [])),
             tags=list(document.get("tags", [])),
+            continuation_context=document.get("continuation_context", ""),
             created_at=self._parse_datetime(document["created_at"]),
             updated_at=self._parse_datetime(document["updated_at"]),
         )

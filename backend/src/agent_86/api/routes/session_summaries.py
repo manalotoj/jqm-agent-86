@@ -35,6 +35,7 @@ def to_response(summary: SessionSummary) -> SessionSummaryResponse:
         open_questions=summary.open_questions,
         tools_used=summary.tools_used,
         tags=summary.tags,
+        continuation_context=summary.continuation_context,
         created_at=summary.created_at,
         updated_at=summary.updated_at,
     )

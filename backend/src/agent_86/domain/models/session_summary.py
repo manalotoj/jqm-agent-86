@@ -20,5 +20,6 @@ class SessionSummary:
     open_questions: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    continuation_context: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -29,6 +29,7 @@ class ChatSessionSummary(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    continuation_context: str = Field(default="")
 
 
 class SessionSummaryResponse(ChatSessionSummary):

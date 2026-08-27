@@ -582,6 +582,7 @@ class ChatModelService:
         normalized.setdefault("open_questions", [])
         normalized.setdefault("tools_used", [])
         normalized.setdefault("tags", [])
+        normalized.setdefault("continuation_context", "")
 
         normalized["artifacts_generated"] = self._normalize_artifact_refs(
             normalized["artifacts_generated"],
