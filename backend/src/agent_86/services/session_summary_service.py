@@ -75,8 +75,7 @@ class SessionSummaryService:
         messages = await self._message_service.list_messages(user_id, session_id)
         artifacts = await self._artifact_service.list_artifacts(user_id, session_id)
 
-        context_payload = await self._build_context_payload(
-            user_id=user_id,
+        context_payload = self._build_context_payload(
             session_id=session_id,
             messages=messages,
             artifacts=artifacts,
@@ -111,24 +110,15 @@ class SessionSummaryService:
     def _build_summary_id(self, session_id: str) -> str:
         return f"summary:{session_id}"
 
-    async def _build_context_payload(
+    def _build_context_payload(
         self,
         *,
-        user_id: str,
         session_id: str,
         messages: list[Message],
         artifacts: list[Artifact],
     ) -> dict:
         start = self._first_message_datetime(messages)
         end = self._last_message_datetime(messages)
-
-        artifact_ids = [artifact.id for artifact in artifacts]
-        artifact_content_result = await self._artifact_prompt_context_service.build_message_for_artifact_ids(
-            user_id=user_id,
-            session_id=session_id,
-            artifact_ids=artifact_ids,
-        )
-
         return {
             "session_id": session_id,
             "date_range_start": start.isoformat().replace("+00:00", "Z"),
@@ -136,7 +126,6 @@ class SessionSummaryService:
             "messages": [
                 {
                     "role": message.role,
-                    "message_type": self._classify_message_type(message),
                     "content": message.content,
                     "metadata": message.metadata,
                     "created_at": message.created_at.isoformat().replace("+00:00", "Z")
@@ -154,31 +143,8 @@ class SessionSummaryService:
                 }
                 for artifact in artifacts
             ],
-            "artifact_prompt_context": artifact_content_result.artifact_details,
-            "artifact_content_sections": (
-                artifact_content_result.context_message.content
-                if artifact_content_result.context_message is not None
-                else ""
-            ),
+            "artifact_prompt_context": self._artifact_prompt_context_service.build_summary_artifact_details(artifacts),
         }
-
-    def _classify_message_type(self, message: Message) -> str:
-        """Return a human-readable message type label derived from message role and metadata."""
-        metadata = message.metadata or {}
-        message_type = str(metadata.get("message_type", "")).strip()
-        if message_type == "function_call":
-            return "tool_call"
-        if message_type == "function_call_output":
-            return "tool_result"
-        if message.role == "tool":
-            return "tool_result"
-        if message.role == "system":
-            return "system"
-        if message.role == "user":
-            return "user"
-        if message.role == "assistant":
-            return "assistant"
-        return message.role
 
     def _merge_tools_used(self, model_tools_used: list[str], messages: list[Message]) -> list[str]:
         seen: set[str] = set()

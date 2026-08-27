@@ -1173,25 +1173,12 @@ def test_generate_session_summary_uses_messages_and_persisted_artifacts(api_clie
 
     call_kwargs = chat_model_service.generate_structured_summary.await_args.kwargs
     context_payload = call_kwargs["context_payload"]
-
-    # artifact_prompt_context now uses the full build_message_for_artifact_ids shape
-    # (strategy/is_partial/is_unreadable) instead of the lightweight metadata-only shape
     assert context_payload["artifact_prompt_context"] == [
         {
             "id": uploaded_artifact["id"],
             "filename": "plan.docx",
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "strategy": "unreadable",
-            "is_partial": False,
-            "is_unreadable": True,
+            "metadata": {"label": "draft"},
+            "readability": "unreadable",
         }
     ]
-
-    # artifact_content_sections is the formatted text block describing artifact contents
-    assert "plan.docx" in context_payload["artifact_content_sections"]
-    assert context_payload["artifact_content_sections"] != ""
-
-    # messages now carry a message_type label
-    message_types = [m["message_type"] for m in context_payload["messages"]]
-    assert "user" in message_types
-    assert "tool_call" in message_types
