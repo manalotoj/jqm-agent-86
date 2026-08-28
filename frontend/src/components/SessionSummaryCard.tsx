@@ -1,4 +1,5 @@
-import { LoaderCircle, RefreshCw, Sparkles, WandSparkles } from "lucide-react";
+import { useState } from "react";
+import { Check, ClipboardCopy, LoaderCircle, RefreshCw, Sparkles, WandSparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -121,6 +122,47 @@ function ActionItemStatus({ status }: { status: SessionSummary["action_items"][n
   );
 }
 
+function ContinuationContextBlock({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="rounded-xl border bg-muted/20 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Continue in new session
+        </p>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs"
+          onClick={handleCopy}
+        >
+          {copied ? (
+            <>
+              <Check className="size-3.5 text-emerald-500" />
+              <span className="text-emerald-500">Copied</span>
+            </>
+          ) : (
+            <>
+              <ClipboardCopy className="size-3.5" />
+              Copy
+            </>
+          )}
+        </Button>
+      </div>
+      <p className="mt-3 text-sm leading-6 whitespace-pre-wrap text-foreground">{text}</p>
+    </div>
+  );
+}
+
 function SummaryContent({ summary }: { summary: SessionSummary }) {
   return (
     <div className="mt-4 space-y-5">
@@ -128,6 +170,10 @@ function SummaryContent({ summary }: { summary: SessionSummary }) {
         <p className="text-sm font-semibold text-foreground">{summary.title}</p>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">{summary.one_line_summary}</p>
       </div>
+
+      {summary.continuation_context ? (
+        <ContinuationContextBlock text={summary.continuation_context} />
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border bg-background p-4">

@@ -25,6 +25,7 @@ export interface SessionSummary {
   open_questions: string[];
   tools_used: string[];
   tags: string[];
+  continuation_context: string;
   created_at: string;
   updated_at: string;
 }
