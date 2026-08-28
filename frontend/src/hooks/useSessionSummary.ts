@@ -33,3 +33,12 @@ export function useGenerateSessionSummary(sessionId: string | null) {
     },
   });
 }
+
+export function useGenerateContextSummary(sessionId: string | null) {
+  const { instance } = useMsal();
+  const account = getActiveAccountOrFirst();
+
+  return useMutation({
+    mutationFn: () => sessionSummariesApi.generateContextSummary(instance, account, sessionId!),
+  });
+}

@@ -8,6 +8,7 @@ from agent_86.api.routes.messages import router as messages_router
 from agent_86.api.routes.runtime_config import router as runtime_config_router
 from agent_86.api.routes.sessions import router as sessions_router
 from agent_86.api.routes.session_summaries import router as session_summaries_router
+from agent_86.api.routes.session_summaries import context_summary_router
 
 router = APIRouter()
 router.include_router(health_router)
@@ -17,4 +18,5 @@ router.include_router(messages_router)
 router.include_router(artifacts_router)
 router.include_router(chat_router)
 router.include_router(session_summaries_router)
+router.include_router(context_summary_router)
 router.include_router(azure_bicep_conversion_router)

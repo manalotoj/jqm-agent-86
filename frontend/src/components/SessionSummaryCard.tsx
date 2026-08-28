@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useGenerateContextSummary } from "@/hooks/useSessionSummary";
 import type { SessionSummary } from "@/types/sessionSummary";
 
 function formatDateTime(value: string) {
@@ -122,14 +123,28 @@ function ActionItemStatus({ status }: { status: SessionSummary["action_items"][n
   );
 }
 
-function ContinuationContextBlock({ text }: { text: string }) {
+function ContinuationContextBlock({
+  text,
+  sessionId,
+}: {
+  text: string;
+  sessionId: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const contextSummary = useGenerateContextSummary(sessionId);
 
-  function handleCopy() {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  async function handleCopy() {
+    try {
+      // Always fetch a fresh context summary from the live session so the
+      // model can draw on the full conversation, then copy the result.
+      const fresh = await contextSummary.mutateAsync();
+      await navigator.clipboard.writeText(fresh);
+    } catch {
+      // Fall back to the stored continuation_context if the live call fails.
+      await navigator.clipboard.writeText(text);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -144,8 +159,14 @@ function ContinuationContextBlock({ text }: { text: string }) {
           size="sm"
           className="h-7 gap-1.5 px-2 text-xs"
           onClick={handleCopy}
+          disabled={contextSummary.isPending}
         >
-          {copied ? (
+          {contextSummary.isPending ? (
+            <>
+              <LoaderCircle className="size-3.5 animate-spin" />
+              Generating…
+            </>
+          ) : copied ? (
             <>
               <Check className="size-3.5 text-emerald-500" />
               <span className="text-emerald-500">Copied</span>
@@ -153,7 +174,7 @@ function ContinuationContextBlock({ text }: { text: string }) {
           ) : (
             <>
               <ClipboardCopy className="size-3.5" />
-              Copy
+              Copy to resume
             </>
           )}
         </Button>
@@ -171,9 +192,10 @@ function SummaryContent({ summary }: { summary: SessionSummary }) {
         <p className="mt-2 text-sm leading-6 text-muted-foreground">{summary.one_line_summary}</p>
       </div>
 
-      {summary.continuation_context ? (
-        <ContinuationContextBlock text={summary.continuation_context} />
-      ) : null}
+      <ContinuationContextBlock
+        text={summary.continuation_context}
+        sessionId={summary.session_id}
+      />
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border bg-background p-4">
